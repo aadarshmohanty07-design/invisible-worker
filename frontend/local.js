@@ -3,9 +3,10 @@
 
   const DB_NAME = "iw-local";
   const DB_VERSION = 1;
-  const BASE_CONF = { photo: 0.62, voice: 0.85, typed: 0.93, sms: 0.78 };
-  const REL_STD = { photo: 0.18, voice: 0.16, typed: 0.06, sms: 0.08 };
-  const KIND_TO_SOURCE = { photo: "ocr", voice: "audio", typed: "manual", sms: "sms" };
+  const BASE_CONF = { photo: 0.62, voice: 0.85, video: 0.72, typed: 0.93, sms: 0.78 };
+  const REL_STD = { photo: 0.18, voice: 0.16, video: 0.15, typed: 0.06, sms: 0.08 };
+  const KIND_TO_SOURCE = { photo: "ocr", voice: "audio", video: "manual", typed: "manual", sms: "sms" };
+  const DISPLAY_SOURCE = { photo: "ocr", voice: "audio", video: "video", typed: "manual", sms: "sms" };
   const SOURCE_TO_KIND = { ocr: "photo", audio: "voice", manual: "typed", sms: "sms" };
   const DAY_FLOOR = 0.05;
   const USUAL_SHARE = 0.3;
@@ -228,7 +229,7 @@
     return (hash >>> 0).toString(16).padStart(8, "0");
   }
 
-  async function addNote(input, mediaBlob) {
+  async function addNote(input, mediaBlob, extras = {}) {
     await init();
     const now = new Date();
     const day = localDay(now);
@@ -244,8 +245,21 @@
         && group.direction === input.direction
         && keyOf(group.direction, group.item, group.qty, group.unit) === key
         && group.lastTime > 0
+        && now.getTime() - group.lastTime >= 0
         && now.getTime() - group.lastTime <= GROUP_WINDOW_MS
       )) || null;
+
+    const attachments = [];
+    for (const attachment of (extras.attachments || []).slice(0, 3)) {
+      if (!attachment?.blob) continue;
+      const attachmentId = uuid();
+      await write("media", (store) => store.put(attachment.blob, attachmentId));
+      attachments.push({
+        id: attachmentId,
+        kind: attachment.kind || "photo",
+        mime: attachment.mime || attachment.blob.type || "image/jpeg",
+      });
+    }
 
     const id = uuid();
     const order = Math.max(0, ...notes.map((note) => note.order), ...(target ? target.notes.map((note) => note.order) : [])) + 1;
@@ -269,6 +283,8 @@
       demo: Boolean(input.demo),
       synced: Boolean(input.synced),
       media: Boolean(mediaBlob),
+      attachments,
+      contextIds: [...new Set(extras.contextIds || [])].slice(0, 3),
     };
 
     await write("notes", (store) => store.put(note));
@@ -317,8 +333,8 @@
   }
 
   function evidenceSummary(notes, groups) {
-    const mix = { audio: 0, ocr: 0, sms: 0, manual: 0 };
-    notes.forEach((note) => { mix[KIND_TO_SOURCE[note.kind] || "manual"] += 1; });
+    const mix = { audio: 0, ocr: 0, video: 0, sms: 0, manual: 0 };
+    notes.forEach((note) => { mix[DISPLAY_SOURCE[note.kind] || "manual"] += 1; });
     const weighted = groups.reduce((total, group) => total + group.mean, 0);
     const confidence = weighted > 0
       ? groups.reduce((total, group) => total + group.mean * group.confidence, 0) / weighted
@@ -403,7 +419,7 @@
       notes,
       events: notes.map((note) => ({
         event_id: note.id,
-        source: KIND_TO_SOURCE[note.kind] || "manual",
+        source: DISPLAY_SOURCE[note.kind] || "manual",
         device_id: note.deviceId,
         device_label: deviceLabel(note.deviceId),
         wall_clock: note.createdAt,
@@ -422,11 +438,12 @@
   async function explain(groupId) {
     await init();
     const notes = (await getAllNotes()).sort((a, b) => a.order - b.order);
-    const group = buildGroups(notes).find((item) => item.id === groupId);
+    const allGroups = buildGroups(notes);
+    const group = allGroups.find((item) => item.id === groupId);
     if (!group) throw new Error("This note is no longer on the phone.");
     const sources = group.notes.map((note) => ({
       event_id: note.id,
-      source: KIND_TO_SOURCE[note.kind] || "manual",
+      source: DISPLAY_SOURCE[note.kind] || "manual",
       device_id: note.deviceId,
       device_label: deviceLabel(note.deviceId),
       confidence: note.confidence,
@@ -439,8 +456,23 @@
       unit_price: note.qty ? note.amount / note.qty : note.amount,
       logical_clock: note.order,
       media: note.media,
+      attachments: note.attachments || [],
+      context_ids: note.contextIds || [],
       text: note.text,
     }));
+    const contexts = [];
+    group.notes.forEach((note) => {
+      (note.contextIds || []).forEach((contextId) => {
+        const linked = allGroups.find((item) => item.id === contextId);
+        if (!linked || contexts.some((item) => item.transaction_id === contextId)) return;
+        contexts.push({
+          transaction_id: linked.id,
+          title: groupTitle(linked),
+          amount: linked.mean,
+          status: linked.status,
+        });
+      });
+    });
     const ranges = group.notes.map((note) => ({
       event_id: note.id,
       source: KIND_TO_SOURCE[note.kind] || "manual",
@@ -470,8 +502,17 @@
       },
       narrative: "",
       evidence_event_ids: group.notes.map((note) => note.id),
+      contexts,
       canonical_fallback: false,
     };
+  }
+
+  function groupTitle(group) {
+    if (String(group.account || "").startsWith("Udhaar:")) {
+      return `${String(group.account).split(":").slice(1).join(":")} paid back`;
+    }
+    const item = String(group.item || "").toLowerCase();
+    return group.direction === "in" ? `Sold ${item}` : `Bought ${item}`;
   }
 
   async function countStock(input) {
@@ -519,8 +560,11 @@
     const day = localDay();
     const start = new Date();
     start.setHours(0, 0, 0, 0);
-    const elapsed = Math.max(60000, Date.now() - start.getTime());
-    const at = (fraction) => new Date(start.getTime() + elapsed * fraction).toISOString();
+    const at = (hour, minute = 0) => {
+      const date = new Date(start);
+      date.setHours(hour, minute, 0, 0);
+      return date.toISOString();
+    };
     const base = (overrides) => ({
       id: overrides.id || uuid(),
       groupId: overrides.groupId,
@@ -541,17 +585,19 @@
       demo: true,
       synced: false,
       media: false,
+      attachments: [],
+      contextIds: [],
     });
     const notes = [
       base({ id: "demo-photo", groupId: "seed-tomato", kind: "photo", item: "tomatoes", qty: 3, unit: "kg", amount: 180, direction: "out", createdAt: "1970-01-01T00:00:00.000Z", deviceId: "demo-b", wrongDate: true, order: 9, text: "TOMATO 3 KG 180 ONION 2 KG" }),
-      base({ id: "demo-onion", groupId: "seed-onion", kind: "sms", item: "onion", qty: 2, unit: "kg", amount: 80, direction: "out", createdAt: at(0.1), deviceId: "demo-a", order: 2, text: "2 kg onion 80" }),
-      base({ id: "demo-oil", groupId: "seed-oil", kind: "typed", item: "oil", qty: 1, unit: "litre", amount: 286, direction: "out", createdAt: at(0.18), deviceId: "demo-a", order: 3, text: "Oil 1 litre 286" }),
-      base({ id: "demo-gas", groupId: "seed-gas", kind: "typed", item: "gas cylinder", qty: 1, unit: "piece", amount: 600, direction: "out", createdAt: at(0.22), deviceId: "demo-a", order: 4, text: "Gas cylinder 600" }),
-      base({ id: "demo-tomato-voice", groupId: "seed-tomato", kind: "voice", item: "tomatoes", qty: 3, unit: "kg", amount: 180, direction: "out", createdAt: at(0.08), deviceId: "demo-a", order: 1, text: "Bhai 3 kilo tamatar liya 180 mein... Sharma ji ka 40 jama kar, aur 7 plate poha de." }),
-      base({ id: "demo-poha", groupId: "seed-poha", kind: "typed", item: "poha", qty: 7, unit: "plate", amount: 560, direction: "in", createdAt: at(0.32), deviceId: "demo-a", order: 5, text: "7 plate poha at 80 each = 560" }),
-      base({ id: "demo-tea", groupId: "seed-tea", kind: "typed", item: "tea", qty: 50, unit: "cup", amount: 1000, direction: "in", createdAt: at(0.55), deviceId: "demo-a", order: 6, text: "50 cups tea at 20 = 1000" }),
-      base({ id: "demo-snacks", groupId: "seed-snacks", kind: "typed", item: "snacks", qty: 40, unit: "piece", amount: 800, direction: "in", createdAt: at(0.7), deviceId: "demo-a", order: 7, text: "40 snacks at 20 = 800" }),
-      base({ id: "demo-credit", groupId: "seed-credit", kind: "sms", item: "sharma ji", qty: 1, unit: "payment", amount: 40, direction: "in", createdAt: at(0.64), deviceId: "demo-c", order: 8, account: "Udhaar:Sharma ji", text: "Sharma ji ka 40 jama ho gaya" }),
+      base({ id: "demo-onion", groupId: "seed-onion", kind: "sms", item: "onion", qty: 2, unit: "kg", amount: 80, direction: "out", createdAt: at(8, 50), deviceId: "demo-a", order: 2, text: "2 kg onion 80" }),
+      base({ id: "demo-oil", groupId: "seed-oil", kind: "typed", item: "oil", qty: 1, unit: "litre", amount: 286, direction: "out", createdAt: at(9, 5), deviceId: "demo-a", order: 3, text: "Oil 1 litre 286" }),
+      base({ id: "demo-gas", groupId: "seed-gas", kind: "typed", item: "gas cylinder", qty: 1, unit: "piece", amount: 600, direction: "out", createdAt: at(9, 20), deviceId: "demo-a", order: 4, text: "Gas cylinder 600" }),
+      base({ id: "demo-tomato-voice", groupId: "seed-tomato", kind: "voice", item: "tomatoes", qty: 3, unit: "kg", amount: 180, direction: "out", createdAt: at(9, 14), deviceId: "demo-a", order: 1, text: "Bhai 3 kilo tamatar liya 180 mein... Sharma ji ka 40 jama kar, aur 7 plate poha de." }),
+      base({ id: "demo-poha", groupId: "seed-poha", kind: "typed", item: "poha", qty: 7, unit: "plate", amount: 560, direction: "in", createdAt: at(10, 5), deviceId: "demo-a", order: 5, text: "7 plate poha at 80 each = 560" }),
+      base({ id: "demo-tea", groupId: "seed-tea", kind: "typed", item: "tea", qty: 50, unit: "cup", amount: 1000, direction: "in", createdAt: at(15, 0), deviceId: "demo-a", order: 6, text: "50 cups tea at 20 = 1000" }),
+      base({ id: "demo-snacks", groupId: "seed-snacks", kind: "typed", item: "snacks", qty: 40, unit: "piece", amount: 800, direction: "in", createdAt: at(18, 30), deviceId: "demo-a", order: 7, text: "40 snacks at 20 = 800" }),
+      base({ id: "demo-credit", groupId: "seed-credit", kind: "sms", item: "sharma ji", qty: 1, unit: "payment", amount: 40, direction: "in", createdAt: at(18, 20), deviceId: "demo-c", order: 8, account: "Udhaar:Sharma ji", text: "Sharma ji ka 40 jama ho gaya" }),
     ];
     await write("notes", (store) => notes.forEach((note) => store.put(note)));
     await setMeta("stock", {
@@ -565,7 +611,7 @@
       missingValue: 53.7,
       usualQty: 0.9,
       consistent: true,
-      countedAt: at(0.9),
+      countedAt: at(21, 0),
       day,
       seed: true,
     });
@@ -643,7 +689,10 @@
       const meta = String(event.media_ref || "");
       const direction = meta.includes("iw:out") ? "out" : meta.includes("iw:in") ? "in" : /^sold/i.test(event.raw_text || "") ? "in" : "out";
       const accountMatch = meta.match(/:acc=([^:]+)/);
-      const kind = SOURCE_TO_KIND[event.source] || "typed";
+      const kindMatch = meta.match(/^iw:[^:]+:([a-z]+)/);
+      const kind = kindMatch && ["photo", "voice", "video", "typed", "sms"].includes(kindMatch[1])
+        ? kindMatch[1]
+        : SOURCE_TO_KIND[event.source] || "typed";
       const day = localDay();
       const wrongDate = isWrongClock(event.wall_clock);
       order += 1;
@@ -667,6 +716,8 @@
         demo: false,
         synced: true,
         media: false,
+        attachments: [],
+        contextIds: [],
       };
       if (!wrongDate) {
         const key = keyOf(note.direction, note.item, note.qty, note.unit);

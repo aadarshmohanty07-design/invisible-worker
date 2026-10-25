@@ -1,7 +1,7 @@
 (() => {
   "use strict";
 
-  const SOURCE_CLASSES = new Set(["audio", "ocr", "sms", "manual"]);
+  const SOURCE_CLASSES = new Set(["audio", "ocr", "video", "sms", "manual"]);
 
   const TAB_SUBTITLES = {
     today: "Your money",
@@ -10,7 +10,7 @@
     more: "Stock and settings",
   };
 
-  const SOURCE_NAMES = { audio: "Voice note", ocr: "Bill photo", sms: "SMS", manual: "Typed note" };
+  const SOURCE_NAMES = { audio: "Voice note", ocr: "Bill photo", video: "Video", sms: "SMS", manual: "Typed note" };
   const STATUS_LABELS = { fused: "Checked", posted: "Saved", pending: "To check", voided: "Cancelled" };
   const STATUS_TONES = { fused: "green", posted: "quiet", pending: "amber", voided: "red" };
   const CAUSE_NAMES = { spoilage: "Rotted", theft: "Stolen", personal_consumption: "Taken home" };
@@ -50,6 +50,19 @@
       chunks: [],
       timer: null,
       seconds: 0,
+      mode: null,
+      attachments: [],
+      contextIds: [],
+    },
+    assistant: {
+      lang: window.localStorage.getItem("iw-lang") === "hi"
+        || (!window.localStorage.getItem("iw-lang") && String(navigator.language || "").toLowerCase().startsWith("hi"))
+        ? "hi"
+        : "en",
+      state: null,
+      draft: null,
+      recognition: null,
+      listening: false,
     },
   };
 
@@ -323,7 +336,7 @@
     const sheet = $(id);
     if (!sheet || sheet.hidden) return;
     sheet.hidden = true;
-    const anyOpen = ["#receipt-sheet", "#add-sheet", "#stock-sheet"].some((selector) => {
+    const anyOpen = ["#receipt-sheet", "#add-sheet", "#stock-sheet", "#assistant-sheet"].some((selector) => {
       const element = $(selector);
       return element && !element.hidden;
     });
@@ -334,6 +347,7 @@
     closeSheet("#receipt-sheet");
     closeAddSheet();
     closeSheet("#stock-sheet");
+    closeAssistant();
   }
 
   function hideSplash() {
@@ -784,6 +798,11 @@
               </div>
               ${text ? `<p class="source-note">“${esc(text)}”</p>` : ""}
               <div class="source-media" data-media="${esc(source.event_id)}" hidden></div>
+              ${(source.attachments || []).map((attachment) => `
+                <div class="attach-media">
+                  <span class="faint">Bill photo</span>
+                  <div class="source-media" data-media="${esc(attachment.id)}" hidden></div>
+                </div>`).join("")}
               <div class="source-facts">${facts}</div>
               ${range ? `<div class="source-facts"><span>On its own: ${money(range.amount_mean)}</span></div>` : ""}
               ${source.clock_suspect ? '<span class="tag tag--red" style="margin-top:8px">Wrong date on this note</span>' : ""}
@@ -838,6 +857,7 @@
     const wrongDate = sources.some((source) => source.clock_suspect)
       || evidenceEvents.some((event) => isSuspectWallClock(event.wall_clock));
     const spread = Number(explanation.amount_std_dev) || 0;
+    const hasMedia = sources.some((source) => source.media || (source.attachments || []).length);
 
     $("#receipt-title").textContent = `Why ${money(explanation.amount_mean)}?`;
     $("#receipt-body").innerHTML = `
@@ -856,6 +876,7 @@
       <section class="receipt-section">
         <h3>What we used</h3>
         <div class="source-grid">${sourceCards}</div>
+        ${hasMedia ? '<p class="faint" style="margin:8px 0 0">Photos and video stay on this phone.</p>' : ""}
       </section>
 
       <section class="receipt-section">
@@ -873,6 +894,17 @@
         <h3>What this means</h3>
         <p class="result-line">${whyText}${wrongDate ? " The bill photo had a wrong date, but we still used the amount." : ""}</p>
       </section>
+
+      ${(explanation.contexts || []).length ? `
+      <section class="receipt-section">
+        <h3>Linked notes</h3>
+        <div class="context-list">
+          ${explanation.contexts.map((context) => `
+            <button class="context-row" type="button" data-explain="${esc(context.transaction_id)}">
+              <span>${esc(context.title)}</span><strong>${money(context.amount)}</strong>
+            </button>`).join("")}
+        </div>
+      </section>` : ""}
 
       <details class="fold fold--inner">
         <summary>More detail</summary>
@@ -926,6 +958,12 @@
         audio.src = url;
         audio.className = "source-audio";
         holder.appendChild(audio);
+      } else if (String(blob.type).startsWith("video/")) {
+        const video = document.createElement("video");
+        video.controls = true;
+        video.playsInline = true;
+        video.src = url;
+        holder.appendChild(video);
       } else {
         continue;
       }
@@ -946,6 +984,7 @@
     }
     if (add.stream) add.stream.getTracks().forEach((track) => track.stop());
     if (add.mediaUrl) URL.revokeObjectURL(add.mediaUrl);
+    add.attachments.forEach((attachment) => URL.revokeObjectURL(attachment.url));
     state.add = {
       kind: "typed",
       direction: "out",
@@ -957,6 +996,9 @@
       chunks: [],
       timer: null,
       seconds: 0,
+      mode: null,
+      attachments: [],
+      contextIds: [],
     };
     $("#capture-row").hidden = false;
     $("#add-draft").hidden = true;
@@ -965,6 +1007,11 @@
     $("#add-form").reset();
     $$(".seg__btn").forEach((button) => button.classList.toggle("is-active", button.dataset.direction === "out"));
     $("#photo-input").value = "";
+    $("#bill-input").value = "";
+    renderAttachments();
+    renderContextList();
+    $("#context-picker").hidden = true;
+    $("#context-picker").innerHTML = "";
   }
 
   function openAddSheet() {
@@ -990,8 +1037,13 @@
       $("#capture-row").hidden = true;
       draft.hidden = false;
       draft.innerHTML = `
-        <div class="recording"><span class="recording__dot"></span>Recording… <span id="rec-time">0:00</span></div>
+        <div class="recording"><span class="recording__dot"></span>${add.mode === "video" ? "Recording video" : "Recording"}… <span id="rec-time">0:00</span></div>
+        ${add.mode === "video" ? '<video id="video-preview" autoplay muted playsinline></video>' : ""}
         <div class="draft__actions"><button class="btn btn--danger-outline" type="button" id="stop-rec">Stop</button></div>`;
+      if (add.mode === "video") {
+        const preview = $("#video-preview");
+        if (preview) preview.srcObject = add.stream;
+      }
       return;
     }
     if (!add.mediaBlob) {
@@ -999,15 +1051,17 @@
       draft.innerHTML = "";
       return;
     }
-    const isImage = String(add.mediaBlob.type).startsWith("image/");
+    const type = String(add.mediaBlob.type);
+    const isImage = type.startsWith("image/");
+    const isVideo = type.startsWith("video/");
     $("#capture-row").hidden = true;
     draft.hidden = false;
     draft.innerHTML = `
       <div class="draft__row">
-        <span class="draft__label">${isImage ? "Photo attached" : "Voice note ready"}</span>
+        <span class="draft__label">${isImage ? "Photo attached" : isVideo ? "Video ready" : "Voice note ready"}</span>
         <button class="btn btn--small btn--ghost" type="button" id="redo-media">Change</button>
       </div>
-      ${isImage ? `<img src="${add.mediaUrl}" alt="The photo you took">` : `<audio controls src="${add.mediaUrl}"></audio>`}
+      ${isImage ? `<img src="${add.mediaUrl}" alt="The photo you took">` : isVideo ? `<video controls playsinline src="${add.mediaUrl}"></video>` : `<audio controls src="${add.mediaUrl}"></audio>`}
     `;
   }
 
@@ -1017,6 +1071,7 @@
     add.mediaBlob = null;
     add.mediaUrl = null;
     add.kind = "typed";
+    add.mode = null;
     $("#capture-row").hidden = false;
     $("#add-draft").hidden = true;
     $("#add-draft").innerHTML = "";
@@ -1050,6 +1105,80 @@
     showAddForm("photo");
   }
 
+  async function onBillsPicked(event) {
+    const files = Array.from(event.target.files || []);
+    $("#bill-input").value = "";
+    if (!files.length) return;
+    const room = 3 - state.add.attachments.length;
+    if (room <= 0) {
+      toast("You can add up to 3 bill photos.", "error");
+      return;
+    }
+    for (const file of files.slice(0, room)) {
+      const blob = await shrinkImage(file);
+      state.add.attachments.push({ blob, mime: blob.type, url: URL.createObjectURL(blob) });
+    }
+    renderAttachments();
+  }
+
+  function renderAttachments() {
+    const list = $("#attach-list");
+    if (!list) return;
+    list.innerHTML = state.add.attachments.map((attachment, index) => `
+      <span class="attach-chip">
+        <img src="${attachment.url}" alt="Bill photo ${index + 1}">
+        <span>Bill ${index + 1}</span>
+        <button type="button" data-remove-attach="${index}" aria-label="Remove bill photo">×</button>
+      </span>`).join("");
+  }
+
+  function renderContextList() {
+    const list = $("#context-list");
+    if (!list) return;
+    list.innerHTML = state.add.contextIds.map((id) => {
+      const entry = findLedger(id);
+      if (!entry) return "";
+      return `<span class="context-chip">${esc(entryInfo(entry).title)} · ${money(entry.debit.amount_mean)}<button type="button" data-remove-context="${esc(id)}" aria-label="Remove linked note">×</button></span>`;
+    }).join("");
+  }
+
+  function renderContextPicker() {
+    const picker = $("#context-picker");
+    const entries = state.ledger.slice(-6).reverse();
+    if (!entries.length) {
+      picker.innerHTML = '<p class="muted" style="margin:4px 6px">No other notes yet.</p>';
+      return;
+    }
+    picker.innerHTML = entries.map((entry) => {
+      const selected = state.add.contextIds.includes(entry.transaction_id);
+      return `<button class="context-option${selected ? " is-selected" : ""}" type="button" data-context-id="${esc(entry.transaction_id)}">
+        <strong>${esc(entryInfo(entry).title)}</strong><span>${money(entry.debit.amount_mean)}</span>
+      </button>`;
+    }).join("");
+  }
+
+  function toggleContextPicker() {
+    const picker = $("#context-picker");
+    picker.hidden = !picker.hidden;
+    if (!picker.hidden) renderContextPicker();
+  }
+
+  function toggleContext(id) {
+    const list = state.add.contextIds;
+    const index = list.indexOf(id);
+    if (index >= 0) {
+      list.splice(index, 1);
+    } else if (list.length < 3) {
+      list.push(id);
+    } else {
+      toast("You can link up to 3 notes.", "error");
+      return;
+    }
+    renderContextList();
+    renderContextPicker();
+    $("#context-picker").hidden = true;
+  }
+
   async function startVoice() {
     if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
       toast("Voice is not available here. Type it instead.", "error");
@@ -1061,6 +1190,7 @@
       const recorder = new MediaRecorder(stream);
       const add = state.add;
       add.kind = "voice";
+      add.mode = "voice";
       add.stream = stream;
       add.recorder = recorder;
       add.chunks = [];
@@ -1093,8 +1223,53 @@
     }
   }
 
-  function stopVoice() {
+  function stopRecording() {
     if (state.add.recorder?.state === "recording") state.add.recorder.stop();
+  }
+
+  async function startVideo() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      toast("Video is not available here. Use a photo.", "error");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: true });
+      const type = MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")
+        ? "video/webm;codecs=vp9,opus"
+        : "video/webm";
+      const recorder = new MediaRecorder(stream, { mimeType: type });
+      const add = state.add;
+      add.kind = "video";
+      add.mode = "video";
+      add.stream = stream;
+      add.recorder = recorder;
+      add.chunks = [];
+      add.seconds = 0;
+      add.recording = true;
+      recorder.ondataavailable = (eventData) => {
+        if (eventData.data.size) add.chunks.push(eventData.data);
+      };
+      recorder.onstop = () => {
+        if (state.add !== add) return;
+        add.recording = false;
+        if (add.timer) window.clearInterval(add.timer);
+        stream.getTracks().forEach((track) => track.stop());
+        add.mediaBlob = new Blob(add.chunks, { type: recorder.mimeType || "video/webm" });
+        add.mediaUrl = URL.createObjectURL(add.mediaBlob);
+        renderDraft();
+        showAddForm("video");
+      };
+      recorder.start();
+      renderDraft();
+      add.timer = window.setInterval(() => {
+        add.seconds += 1;
+        const label = $("#rec-time");
+        if (label) label.textContent = `${Math.floor(add.seconds / 60)}:${String(add.seconds % 60).padStart(2, "0")}`;
+        if (add.seconds >= 15 && recorder.state === "recording") recorder.stop();
+      }, 1000);
+    } catch {
+      toast("Camera not allowed. Use a photo instead.", "error");
+    }
   }
 
   async function onAddSubmit(event) {
@@ -1119,7 +1294,14 @@
         unit,
         amount,
         text,
-      }, state.add.mediaBlob);
+      }, state.add.mediaBlob, {
+        attachments: state.add.attachments.map((attachment) => ({
+          blob: attachment.blob,
+          kind: "photo",
+          mime: attachment.mime,
+        })),
+        contextIds: state.add.contextIds,
+      });
       closeAddSheet();
       switchTab("today");
       await refreshLocal();
@@ -1170,6 +1352,576 @@
       setButtonBusy(button, false);
     }
   }
+
+  /* ---------- Voice assistant ---------- */
+
+  const ASSISTANT_TEXT = {
+    en: {
+      title: "Ask me",
+      eyebrow: "Voice assistant",
+      idle: "Tap the mic and speak",
+      statusListening: "Listening…",
+      langName: "English",
+      otherLang: "हिंदी",
+      locationLabel: "Use my location",
+      hint: "Voice needs internet. The money book works offline.",
+      quickAdd: "Add a note",
+      quickToday: "Today's money",
+      quickStock: "Count stock",
+      quickSync: "Sync",
+      greet: "What do you want to do? Say add a note, today's money, count stock, or sync.",
+      askDirection: "Did you sell or spend?",
+      askItem: "What was it?",
+      askAmount: "How many rupees?",
+      askQty: "How much? Say a number and a unit, like 3 kilos or 7 plates.",
+      askStock: (item) => `How many kilos of ${item} are left?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "received for" : "spent on"} ${draft.item}. Say yes to save.`,
+      saved: "Saved.",
+      cancelled: "Okay, cancelled.",
+      today: (summary) => `You made ${money(summary.profit_mean)} today, give or take ${money(summary.profit_std_dev)}. Money in ${money(summary.revenue_mean)}, money out ${money(summary.cogs_mean)}, missing ${money(summary.loss_mean)}.`,
+      noData: "No notes yet. Add your first one.",
+      whyNone: "There is no note to explain yet.",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} note${info.notes === 1 ? "" : "s"}, ${info.confidence} percent sure.`,
+      stockMissing: (info) => `${info.item} is ${info.missing} kilos short, about ${money(info.value)}.`,
+      noStock: "No stock count yet. Say count stock to add one.",
+      syncDone: (info) => `Synced. ${info.pushed} sent, ${info.pulled} received.`,
+      syncOffline: "No connection. Everything is saved on this phone.",
+      stockOk: "Your stock matches what you bought.",
+      unknown: "I can add a note, tell today's money, count stock, or sync.",
+      noInternet: "Voice needs internet in this browser. The money book still works offline.",
+      micDenied: "Microphone is not allowed. Use the buttons.",
+      notHeard: "I didn't hear that. Tap the mic and try again.",
+      unsupported: "Voice is not supported in this browser. Use the buttons.",
+      locationDenied: "Location not available. Switch language with the button.",
+      locationSet: "Language set from your location.",
+      langSet: "I will speak in English.",
+      saveFailed: "Could not save. Try again.",
+    },
+    hi: {
+      title: "पूछिए",
+      eyebrow: "आवाज़ सहायक",
+      idle: "माइक दबाकर बोलिए",
+      statusListening: "सुन रहा हूँ…",
+      langName: "हिंदी",
+      otherLang: "English",
+      locationLabel: "मेरी जगह से भाषा",
+      hint: "आवाज़ के लिए इंटरनेट चाहिए। खाता ऑफ़लाइन चलता है।",
+      quickAdd: "नोट जोड़ें",
+      quickToday: "आज की कमाई",
+      quickStock: "स्टॉक गिनें",
+      quickSync: "सिंक",
+      greet: "बोलिए — नोट जोड़ूँ, आज की कमाई बताऊँ, स्टॉक गिनूँ या सिंक करूँ?",
+      askDirection: "आपने बेचा या खर्च किया?",
+      askItem: "क्या था?",
+      askAmount: "कितने रुपये?",
+      askQty: "कितना? जैसे तीन किलो या सात प्लेट।",
+      askStock: (item) => `${displayItem(item)} कितने किलो बचे हैं?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "मिले" : "खर्च"}, ${displayItem(draft.item)}। ठीक है? हाँ कहिए।`,
+      saved: "सेव हो गया।",
+      cancelled: "ठीक है, रद्द किया।",
+      today: (summary) => `आज आपने ${money(summary.profit_mean)} कमाए, लगभग ${money(summary.profit_std_dev)} कम या ज़्यादा। आया ${money(summary.revenue_mean)}, खर्च ${money(summary.cogs_mean)}, गायब ${money(summary.loss_mean)}।`,
+      noData: "अभी कोई नोट नहीं है। पहला नोट जोड़िए।",
+      whyNone: "अभी बताने के लिए कोई नोट नहीं है।",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} नोट, ${info.confidence} प्रतिशत भरोसा।`,
+      stockMissing: (info) => `${displayItem(info.item)} ${info.missing} किलो कम है, लगभग ${money(info.value)}।`,
+      noStock: "अभी स्टॉक नहीं गिना है। स्टॉक गिनिए।",
+      syncDone: (info) => `सिंक हो गया। ${info.pushed} भेजे, ${info.pulled} मिले।`,
+      syncOffline: "कनेक्शन नहीं है। सब कुछ इस फ़ोन में सेव है।",
+      stockOk: "आपका स्टॉक खरीद के हिसाब से ठीक है।",
+      unknown: "मैं नोट जोड़ने, आज की कमाई, स्टॉक और सिंक में मदद कर सकता हूँ।",
+      noInternet: "आवाज़ के लिए इंटरनेट चाहिए। बटन दबाकर काम कर सकते हैं।",
+      micDenied: "माइक की इजाज़त नहीं है। बटन दबाइए।",
+      notHeard: "सुनाई नहीं दिया। फिर बोलिए।",
+      unsupported: "इस ब्राउज़र में आवाज़ नहीं चलती। बटन दबाइए।",
+      locationDenied: "लोकेशन नहीं मिली। भाषा बटन से बदलिए।",
+      locationSet: "आपकी जगह के हिसाब से भाषा चुनी।",
+      langSet: "अब हिंदी में बोलूँगा।",
+      saveFailed: "सेव नहीं हो सका। फिर कोशिश कीजिए।",
+    },
+  };
+
+  const ASSISTANT_WORDS = {
+    cancel: ["cancel", "stop", "रद्द", "बंद"],
+    yes: ["yes", "ok", "okay", "correct", "हाँ", "हां", "ठीक", "सही"],
+    no: ["no", "नहीं", "नही"],
+    sold: ["sold", "sale", "received", "got", "earned", "बेचा", "बेच", "मिला", "कमाया"],
+    spent: ["spent", "spend", "bought", "buy", "paid", "खर्च", "खरीदा", "खरीद", "दिया"],
+    add: ["add", "note", "नोट", "जोड़", "खर्च", "खरीद", "बेच"],
+    today: ["today", "profit", "made", "make", "money", "earned", "कमाई", "कमाया", "मुनाफा", "आज"],
+    stock: ["stock", "count stock", "स्टॉक", "गिन", "माल"],
+    sync: ["sync", "सिंक"],
+    why: ["why", "explain", "क्यों", "कैसे"],
+    language: ["language", "भाषा"],
+    hindi: ["hindi", "हिंदी"],
+    english: ["english", "अंग्रेज़ी"],
+  };
+
+  const HINDI_STATES = [
+    { name: "Delhi", lat: 28.61, lon: 77.21, hindi: true },
+    { name: "Lucknow", lat: 26.85, lon: 80.95, hindi: true },
+    { name: "Patna", lat: 25.59, lon: 85.14, hindi: true },
+    { name: "Bhopal", lat: 23.26, lon: 77.41, hindi: true },
+    { name: "Jaipur", lat: 26.91, lon: 75.79, hindi: true },
+    { name: "Chandigarh", lat: 30.73, lon: 76.78, hindi: true },
+    { name: "Dehradun", lat: 30.32, lon: 78.03, hindi: true },
+    { name: "Raipur", lat: 21.25, lon: 81.63, hindi: true },
+    { name: "Ranchi", lat: 23.34, lon: 85.31, hindi: true },
+    { name: "Shimla", lat: 31.10, lon: 77.17, hindi: true },
+    { name: "Mumbai", lat: 19.08, lon: 72.88, hindi: false },
+    { name: "Ahmedabad", lat: 23.03, lon: 72.58, hindi: false },
+    { name: "Bengaluru", lat: 12.97, lon: 77.59, hindi: false },
+    { name: "Chennai", lat: 13.08, lon: 80.27, hindi: false },
+    { name: "Hyderabad", lat: 17.39, lon: 78.49, hindi: false },
+    { name: "Kolkata", lat: 22.57, lon: 88.36, hindi: false },
+    { name: "Bhubaneswar", lat: 20.30, lon: 85.82, hindi: false },
+    { name: "Guwahati", lat: 26.14, lon: 91.74, hindi: false },
+    { name: "Thiruvananthapuram", lat: 8.52, lon: 76.94, hindi: false },
+    { name: "Panaji", lat: 15.49, lon: 73.83, hindi: false },
+  ];
+
+  const ITEM_HINDI = {
+    tomatoes: "टमाटर",
+    tomato: "टमाटर",
+    onion: "प्याज़",
+    potato: "आलू",
+    poha: "पोहा",
+    tea: "चाय",
+    snacks: "स्नैक्स",
+    oil: "तेल",
+    "gas cylinder": "गैस सिलेंडर",
+  };
+
+  function assistantText() {
+    return ASSISTANT_TEXT[state.assistant.lang];
+  }
+
+  function hasWord(text, words) {
+    return words.some((word) => (
+      /^[a-z ]+$/i.test(word)
+        ? new RegExp(`\\b${word.replace(/ /g, "\\s+")}\\b`, "i").test(text)
+        : String(text).includes(word)
+    ));
+  }
+
+  function cleanItem(text) {
+    return String(text)
+      .replace(/^(it was|i bought|i sold|i spent on|bought|sold|spent on)\s+/i, "")
+      .replace(/[.?!।]+$/g, "")
+      .trim()
+      .slice(0, 60);
+  }
+
+  function parseNumber(text) {
+    const devanagari = "०१२३४५६७८९";
+    const normalized = String(text)
+      .replace(/[०-९]/g, (character) => String(devanagari.indexOf(character)))
+      .replace(/,/g, "");
+    const match = normalized.match(/\d+(?:\.\d+)?/);
+    return match ? Number(match[0]) : null;
+  }
+
+  function parseQty(text, direction) {
+    const normalized = String(text).toLowerCase();
+    let unit = direction === "in" ? "piece" : "kg";
+    if (/kg|kilo|किलो/.test(normalized)) unit = "kg";
+    else if (/plate|प्लेट/.test(normalized)) unit = "plate";
+    else if (/cup|कप/.test(normalized)) unit = "cup";
+    else if (/litre|liter|लीटर/.test(normalized)) unit = "litre";
+    else if (/piece|नग|पीस/.test(normalized)) unit = "piece";
+    return { qty: parseNumber(text) || 1, unit };
+  }
+
+  function displayItem(item) {
+    if (state.assistant.lang !== "hi") return item;
+    return ITEM_HINDI[String(item).toLowerCase()] || item;
+  }
+
+  function spoken(text) {
+    return String(text).replace(/₹\s?([\d,.]+)/g, (_, amount) => (
+      `${amount} ${state.assistant.lang === "hi" ? "रुपये" : "rupees"}`
+    ));
+  }
+
+  function nearestHindi(lat, lon) {
+    let best = HINDI_STATES[0];
+    let bestDistance = Infinity;
+    HINDI_STATES.forEach((statePoint) => {
+      const distance = ((statePoint.lat - lat) ** 2) + ((statePoint.lon - lon) ** 2);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = statePoint;
+      }
+    });
+    return best.hindi;
+  }
+
+  function voiceFor(lang) {
+    if (!("speechSynthesis" in window)) return null;
+    const voices = window.speechSynthesis.getVoices();
+    const prefix = lang === "hi" ? "hi" : "en";
+    return voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix) && voice.lang.toLowerCase().includes("-in"))
+      || voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix))
+      || null;
+  }
+
+  function setListening(on) {
+    state.assistant.listening = on;
+    $("#assistant-orb")?.classList.toggle("is-listening", on);
+    $("#assistant-btn")?.classList.toggle("is-listening", on);
+    const status = $("#assistant-status");
+    if (status) status.textContent = on ? assistantText().statusListening : assistantText().idle;
+  }
+
+  function speak(text, { listenAfter = false } = {}) {
+    const reply = $("#assistant-reply");
+    if (reply) reply.textContent = text;
+    if (state.assistant.recognition) {
+      try { state.assistant.recognition.abort(); } catch { /* already stopped */ }
+    }
+    setListening(false);
+    if (!("speechSynthesis" in window)) {
+      if (listenAfter) window.setTimeout(startListening, 250);
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(spoken(text));
+    utterance.lang = state.assistant.lang === "hi" ? "hi-IN" : "en-IN";
+    const voice = voiceFor(state.assistant.lang);
+    if (voice) utterance.voice = voice;
+    utterance.rate = 0.95;
+    utterance.onend = () => {
+      if (listenAfter && !$("#assistant-sheet").hidden) window.setTimeout(startListening, 300);
+    };
+    try {
+      window.speechSynthesis.speak(utterance);
+    } catch {
+      if (listenAfter) window.setTimeout(startListening, 250);
+    }
+  }
+
+  function updateAssistantUI() {
+    const text = assistantText();
+    $("#assistant-title").textContent = text.title;
+    $("#assistant-eyebrow").textContent = text.eyebrow;
+    $("#assistant-lang-label").textContent = text.langName;
+    $("#assistant-status").textContent = state.assistant.listening ? text.statusListening : text.idle;
+    $("#assistant-lang-btn").textContent = text.otherLang;
+    $("#assistant-location-btn").textContent = text.locationLabel;
+    $("#assistant-hint").textContent = text.hint;
+    const labels = { add: text.quickAdd, today: text.quickToday, stock: text.quickStock, sync: text.quickSync };
+    $$("#assistant-sheet [data-assistant-action]").forEach((button) => {
+      const label = labels[button.dataset.assistantAction];
+      if (label) button.textContent = label;
+    });
+  }
+
+  function setAssistantLanguage(lang, announce = true) {
+    state.assistant.lang = lang === "hi" ? "hi" : "en";
+    window.localStorage.setItem("iw-lang", state.assistant.lang);
+    updateAssistantUI();
+    if (announce) speak(assistantText().langSet);
+  }
+
+  function toggleAssistantLanguage() {
+    setAssistantLanguage(state.assistant.lang === "en" ? "hi" : "en");
+  }
+
+  function useLocationLanguage() {
+    const text = assistantText();
+    if (!navigator.geolocation) {
+      speak(text.locationDenied);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        const hindi = nearestHindi(position.coords.latitude, position.coords.longitude);
+        state.assistant.lang = hindi ? "hi" : "en";
+        window.localStorage.setItem("iw-lang", state.assistant.lang);
+        updateAssistantUI();
+        speak(`${assistantText().locationSet} ${assistantText().langSet}`);
+      },
+      () => speak(text.locationDenied),
+      { timeout: 8000, maximumAge: 86400000 },
+    );
+  }
+
+  function openAssistant() {
+    openSheet("#assistant-sheet");
+    state.assistant.state = null;
+    state.assistant.draft = null;
+    $("#assistant-reply").textContent = "";
+    updateAssistantUI();
+    speak(assistantText().greet, { listenAfter: true });
+  }
+
+  function closeAssistant() {
+    if (state.assistant.recognition) {
+      try { state.assistant.recognition.abort(); } catch { /* already stopped */ }
+      state.assistant.recognition = null;
+    }
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    setListening(false);
+    closeSheet("#assistant-sheet");
+  }
+
+  function startListening() {
+    const text = assistantText();
+    if (!navigator.onLine) {
+      speak(text.noInternet);
+      return;
+    }
+    if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      speak(text.unsupported);
+      return;
+    }
+    if (state.assistant.recognition) {
+      try { state.assistant.recognition.abort(); } catch { /* already stopped */ }
+    }
+    const recognition = new Recognition();
+    state.assistant.recognition = recognition;
+    recognition.lang = state.assistant.lang === "hi" ? "hi-IN" : "en-IN";
+    recognition.interimResults = true;
+    recognition.continuous = false;
+    recognition.maxAlternatives = 1;
+    recognition.onstart = () => setListening(true);
+    recognition.onresult = (event) => {
+      let interim = "";
+      let finalText = "";
+      for (const result of event.results) {
+        if (result.isFinal) finalText += result[0].transcript;
+        else interim += result[0].transcript;
+      }
+      const status = $("#assistant-status");
+      if (interim && status) status.textContent = interim;
+      if (finalText) {
+        setListening(false);
+        handleUtterance(finalText);
+      }
+    };
+    recognition.onerror = (event) => {
+      setListening(false);
+      if (event.error === "not-allowed" || event.error === "service-not-allowed") speak(text.micDenied);
+      else if (event.error === "network") speak(text.noInternet);
+      else if (event.error === "no-speech") speak(text.notHeard);
+    };
+    recognition.onend = () => setListening(false);
+    try {
+      recognition.start();
+    } catch {
+      setListening(false);
+    }
+  }
+
+  function handleUtterance(raw) {
+    const text = String(raw || "").trim().toLowerCase();
+    if (!text) return;
+    const copy = assistantText();
+    const assistant = state.assistant;
+    if (hasWord(text, ASSISTANT_WORDS.cancel)) {
+      assistant.state = null;
+      assistant.draft = null;
+      speak(copy.cancelled);
+      return;
+    }
+    if (assistant.state === "confirm") {
+      if (hasWord(text, ASSISTANT_WORDS.yes)) {
+        saveAssistantNote();
+      } else if (hasWord(text, ASSISTANT_WORDS.no)) {
+        assistant.state = null;
+        assistant.draft = null;
+        speak(copy.cancelled);
+      } else {
+        speak(copy.confirm(assistant.draft), { listenAfter: true });
+      }
+      return;
+    }
+    if (assistant.state === "direction") {
+      if (hasWord(text, ASSISTANT_WORDS.sold)) assistant.draft.direction = "in";
+      else if (hasWord(text, ASSISTANT_WORDS.spent)) assistant.draft.direction = "out";
+      else {
+        speak(copy.askDirection, { listenAfter: true });
+        return;
+      }
+      assistant.state = "item";
+      speak(copy.askItem, { listenAfter: true });
+      return;
+    }
+    if (assistant.state === "item") {
+      const item = cleanItem(raw);
+      if (!item || hasWord(text, ASSISTANT_WORDS.yes)) {
+        speak(copy.askItem, { listenAfter: true });
+        return;
+      }
+      assistant.draft.item = item;
+      assistant.state = "amount";
+      speak(copy.askAmount, { listenAfter: true });
+      return;
+    }
+    if (assistant.state === "amount") {
+      const amount = parseNumber(text);
+      if (!amount || amount <= 0) {
+        speak(copy.askAmount, { listenAfter: true });
+        return;
+      }
+      assistant.draft.amount = amount;
+      assistant.state = "qty";
+      speak(copy.askQty, { listenAfter: true });
+      return;
+    }
+    if (assistant.state === "qty") {
+      const parsed = parseQty(text, assistant.draft.direction);
+      assistant.draft.qty = parsed.qty;
+      assistant.draft.unit = parsed.unit;
+      assistant.state = "confirm";
+      speak(copy.confirm(assistant.draft), { listenAfter: true });
+      return;
+    }
+    if (assistant.state === "stockqty") {
+      const counted = parseNumber(text);
+      if (counted == null) {
+        speak(copy.askStock(displayItem(assistant.draft.item)), { listenAfter: true });
+        return;
+      }
+      saveAssistantStock(assistant.draft.item, counted);
+      return;
+    }
+    if (hasWord(text, ASSISTANT_WORDS.hindi)) { setAssistantLanguage("hi"); return; }
+    if (hasWord(text, ASSISTANT_WORDS.english)) { setAssistantLanguage("en"); return; }
+    if (hasWord(text, ASSISTANT_WORDS.language)) { toggleAssistantLanguage(); return; }
+    if (hasWord(text, ASSISTANT_WORDS.today)) { speakToday(); return; }
+    if (hasWord(text, ASSISTANT_WORDS.stock)) { startStockFlow(); return; }
+    if (hasWord(text, ASSISTANT_WORDS.sync)) { runAssistantSync(); return; }
+    if (hasWord(text, ASSISTANT_WORDS.why)) { speakWhy(); return; }
+    if (hasWord(text, ASSISTANT_WORDS.add) || hasWord(text, ASSISTANT_WORDS.sold) || hasWord(text, ASSISTANT_WORDS.spent)) {
+      startAddFlow(text);
+      return;
+    }
+    speak(copy.unknown);
+  }
+
+  function startAddFlow(seed = "") {
+    const copy = assistantText();
+    const assistant = state.assistant;
+    assistant.draft = { direction: null, item: null, amount: null, qty: null, unit: null };
+    if (hasWord(seed, ASSISTANT_WORDS.spent)) assistant.draft.direction = "out";
+    else if (hasWord(seed, ASSISTANT_WORDS.sold)) assistant.draft.direction = "in";
+    if (assistant.draft.direction) {
+      assistant.state = "item";
+      speak(copy.askItem, { listenAfter: true });
+    } else {
+      assistant.state = "direction";
+      speak(copy.askDirection, { listenAfter: true });
+    }
+  }
+
+  async function saveAssistantNote() {
+    const assistant = state.assistant;
+    const copy = assistantText();
+    const draft = assistant.draft;
+    assistant.state = null;
+    assistant.draft = null;
+    try {
+      await IWLocal.addNote({
+        kind: "typed",
+        direction: draft.direction,
+        item: draft.item,
+        qty: draft.qty,
+        unit: draft.unit,
+        amount: draft.amount,
+        text: "Added by voice",
+      });
+      await refreshLocal();
+      speak(copy.saved);
+    } catch (error) {
+      console.error(error);
+      speak(copy.saveFailed);
+    }
+  }
+
+  function stockItem() {
+    if (state.stock?.itemKey) return state.stock.itemKey;
+    const entry = [...state.ledger].reverse().find((item) => item.debit.unit === "kg");
+    return entry ? entry.debit.account.split(":")[1] : "tomatoes";
+  }
+
+  function startStockFlow() {
+    const assistant = state.assistant;
+    assistant.draft = { item: stockItem() };
+    assistant.state = "stockqty";
+    speak(assistantText().askStock(displayItem(assistant.draft.item)), { listenAfter: true });
+  }
+
+  async function saveAssistantStock(item, counted) {
+    const assistant = state.assistant;
+    const copy = assistantText();
+    assistant.state = null;
+    assistant.draft = null;
+    try {
+      const stock = await IWLocal.countStock({ item, countedQty: counted });
+      await refreshLocal();
+      if (stock.missingQty > 0) {
+        speak(copy.stockMissing({
+          item: stock.item,
+          missing: num(stock.missingQty, 1),
+          value: stock.missingValue,
+        }));
+      } else {
+        speak(copy.stockOk);
+      }
+    } catch (error) {
+      console.error(error);
+      speak(copy.saveFailed);
+    }
+  }
+
+  function speakToday() {
+    const copy = assistantText();
+    if (state.empty || !state.summary || !state.notes.length) {
+      speak(copy.noData);
+      return;
+    }
+    speak(copy.today(state.summary));
+  }
+
+  function speakWhy() {
+    const copy = assistantText();
+    const entry = [...state.ledger].sort((a, b) => b.logical_clock - a.logical_clock)[0];
+    if (!entry) {
+      speak(copy.whyNone);
+      return;
+    }
+    speak(copy.why({
+      title: entryInfo(entry).title,
+      amount: entry.debit.amount_mean,
+      notes: entry.event_ids.length,
+      confidence: Number(pct(entry.confidence, 0).replace("%", "")) || 0,
+    }));
+  }
+
+  async function runAssistantSync() {
+    const copy = assistantText();
+    try {
+      const info = await IWLocal.sync(state.apiBase);
+      await refreshLocal();
+      speak(copy.syncDone(info));
+    } catch {
+      speak(copy.syncOffline);
+    }
+  }
+
+  function assistantAction(action) {
+    if (action === "add") startAddFlow();
+    else if (action === "today") speakToday();
+    else if (action === "stock") startStockFlow();
+    else if (action === "sync") runAssistantSync();
+  }
+
+  window.addEventListener("iw-assistant-say", (event) => {
+    const text = event?.detail?.text;
+    if (text) handleUtterance(String(text));
+  });
 
   async function runSync(button) {
     await runAction(button, async () => {
@@ -1234,9 +1986,17 @@
     $("#photo-btn").addEventListener("click", () => $("#photo-input").click());
     $("#photo-input").addEventListener("change", onPhotoPicked);
     $("#voice-btn").addEventListener("click", startVoice);
+    $("#video-btn").addEventListener("click", startVideo);
     $("#type-btn").addEventListener("click", () => showAddForm("typed"));
+    $("#bill-btn").addEventListener("click", () => $("#bill-input").click());
+    $("#bill-input").addEventListener("change", onBillsPicked);
+    $("#context-btn").addEventListener("click", toggleContextPicker);
     $("#add-form").addEventListener("submit", onAddSubmit);
     $("#stock-form").addEventListener("submit", onStockSubmit);
+    $("#assistant-btn").addEventListener("click", openAssistant);
+    $("#assistant-orb").addEventListener("click", startListening);
+    $("#assistant-lang-btn").addEventListener("click", toggleAssistantLanguage);
+    $("#assistant-location-btn").addEventListener("click", useLocationLanguage);
     $$("#add-form .seg__btn").forEach((button) => {
       button.addEventListener("click", () => {
         state.add.direction = button.dataset.direction;
@@ -1284,12 +2044,39 @@
         closeSheet("#stock-sheet");
         return;
       }
+      if (event.target.closest("[data-close-assistant]")) {
+        closeAssistant();
+        return;
+      }
       if (event.target.closest("#stop-rec")) {
-        stopVoice();
+        stopRecording();
         return;
       }
       if (event.target.closest("#redo-media")) {
         clearMediaDraft();
+        return;
+      }
+      const removeAttachment = event.target.closest("[data-remove-attach]");
+      if (removeAttachment) {
+        const index = Number(removeAttachment.dataset.removeAttach);
+        const [removed] = state.add.attachments.splice(index, 1);
+        if (removed) URL.revokeObjectURL(removed.url);
+        renderAttachments();
+        return;
+      }
+      const removeContext = event.target.closest("[data-remove-context]");
+      if (removeContext) {
+        toggleContext(removeContext.dataset.removeContext);
+        return;
+      }
+      const contextOption = event.target.closest("[data-context-id]");
+      if (contextOption) {
+        toggleContext(contextOption.dataset.contextId);
+        return;
+      }
+      const assistantButton = event.target.closest("[data-assistant-action]");
+      if (assistantButton) {
+        assistantAction(assistantButton.dataset.assistantAction);
         return;
       }
       const action = event.target.closest("[data-action]");

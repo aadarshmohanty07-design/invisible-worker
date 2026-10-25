@@ -4,8 +4,8 @@
 
 A street vendor can take ₹2,400 in a day and still end up with less: stock spoils, a few plates go
 missing, a customer pays tomorrow. Invisible Worker turns the notes a vendor already makes — a photo
-of a bill, a voice note, a few taps — into one honest daily number with a range and a confidence,
-and it does that **entirely on the phone, with no internet**.
+of a bill, a voice note, a short video of the exchange, a few taps — into one honest daily number
+with a range and a confidence, and it does that **entirely on the phone, with no internet**.
 
 Two cooperating pieces live in this repo:
 
@@ -87,19 +87,32 @@ The same base URL with `/ui/` opens the app on the phone:
 
 ## The app (`/ui/`)
 
-A no-build PWA in `frontend/`. It starts empty: you add a photo, a voice note or a few typed
-values, and every screen is computed on the phone from those notes. No API is needed to use it.
+A no-build PWA in `frontend/`. It starts empty: you add a photo, a voice note, a short video or a
+few typed values, and every screen is computed on the phone from those notes. No API is needed to
+use it.
 
 **Adding a note** (+ button, or "Add a note"):
 
-1. Choose **Photo**, **Voice** or **Type**. A photo uses the phone camera and is compressed on the
-   phone; a voice note is recorded with the mic. Both are stored with the note in IndexedDB.
-2. Say whether it was money spent or money received, then enter the item, quantity, unit and amount
-   (and optionally what was said). Speech-to-text and OCR are not required: the evidence is
-   attached and you confirm the values.
+1. Choose **Photo**, **Voice**, **Video** or **Type**. Photos use the camera and are compressed on
+   the phone; voice and video are recorded with the mic and camera. All of it is stored with the
+   note in IndexedDB.
+2. Say whether it was money spent or money received, then enter the item, quantity, unit and amount.
+   Optionally attach up to **3 bill photos** and link up to **3 past notes** as context. Speech-to-
+   text and OCR are not required: the evidence is attached and you confirm the values.
 3. Save. A note joins a matching note about the same item and quantity within 30 minutes; two
    agreeing notes are marked **Checked** and get a tighter range, a disagreement is marked
-   **To check** and widens the range.
+   **To check** and widens the range. **Why ₹X?** then plays the video or voice note, shows the
+   bill photos, and links the context notes. Photos and video stay on this phone.
+
+**Voice assistant (English / हिंदी)**
+
+The mic button beside **+** opens a guided assistant. It speaks the question, waits for the answer,
+and walks through: sold/spent → item → rupees → quantity → spoken confirmation → save. It also
+answers "how much did I make?", "why this number?", "count stock" and "sync", and reads the result
+aloud. The language defaults to the phone's language; **Use my location** picks Hindi or English
+from the nearest state (offline, no map API), and the language button switches manually. Every
+button stays available. Browser speech recognition needs internet; speech output and the entire
+money book keep working offline.
 
 **Screens**
 
@@ -108,8 +121,8 @@ values, and every screen is computed on the phone from those notes. No API is ne
   the numbers". In a fresh install it offers **Add a note** and **See an example day**.
 - **Records** — every record with a plain title, money in or out, how sure, and a
   Checked / Saved / To check / Wrong date tag; filters by direction. Tap for **Why ₹X?**: the
-  photo/voice evidence (the photo is shown, the voice note can be played), the notes that agree,
-  what each alone would give, and the model detail.
+  video/photo/voice evidence, the bill photos, the linked notes, what each note alone would give,
+  and the model detail.
 - **Phones** — this phone and any phones that synced, with "Sync with shop". Notes are already
   saved here; sync only moves unsynced notes to the shop server and pulls notes from other phones.
 - **More** — count stock, start over, dark screen, and **Advanced** (shop server, all notes on this
@@ -117,7 +130,8 @@ values, and every screen is computed on the phone from those notes. No API is ne
 
 **Offline model** (`frontend/local.js`)
 
-- Notes and media live in IndexedDB. Photos are compressed to max 1400 px; audio stays as recorded.
+- Notes and media live in IndexedDB. Photos are compressed to max 1400 px; video is capped at 15 s;
+  audio stays as recorded.
 - A record is one or more notes about the same purchase or sale. Fusion uses an inverse-variance
   mean, combined confidence, and a wider range when the notes disagree by more than 15% in price.
 - Money in/out are sums of records; missing is the priced stock gap; the daily range is the
@@ -128,20 +142,22 @@ values, and every screen is computed on the phone from those notes. No API is ne
 - Ordering uses the order notes were added, not the phone clock. A note with a 1970 timestamp is
   still evidence but is pinned at the end, so it cannot jump the queue.
 - Sync: every note has a UUID and is posted to `/events` idempotently; `media_ref` carries the
-  direction and account. Syncing twice never duplicates a note, and notes from another phone about
-  the same item, quantity and time are fused into the same record.
+  direction, kind and account. Syncing twice never duplicates a note, and notes from another phone
+  about the same item, quantity and time are fused into the same record. Media, bill photos and
+  linked notes stay on the phone that recorded them.
 
 Suggested rehearsal (five minutes, on the phone, in airplane mode after the first load):
 
 1. **Start over** (More) → Today shows ₹0 and an **Add a note** button.
-2. Take a photo of a bill and enter the amount; record a voice note for the same purchase and enter
-   the same amount → the record becomes **Checked** with two notes.
-3. Add the same item again with a different amount → the range widens and the record becomes
-   **To check**.
-4. **Count stock** → the missing kilos and rupees appear on Today and are subtracted from profit.
-5. Toggle airplane mode: the app keeps working. **Phones → Sync with shop** sends the notes and
+2. Take a photo of a bill, add a bill photo, link an earlier note, and save → open **Why ₹X?** to
+   show the bill and the linked context.
+3. Record a 10-second **video** of a handover, enter the amount and save; open **Why** to play it.
+4. Tap the **mic**, ask "how much did I make?", then switch to हिंदी and ask "आज की कमाई" — the
+   answer is spoken in the selected language.
+5. **Count stock** → the missing kilos and rupees appear on Today and are subtracted from profit.
+6. Toggle airplane mode: the app keeps working. **Phones → Sync with shop** sends the notes and
    pulls notes from another phone.
-6. **See an example day** loads the full 9-note demo day (₹2,400 in, ₹1,146 out, ₹54 missing →
+7. **See an example day** loads the full 9-note demo day (₹2,400 in, ₹1,146 out, ₹54 missing →
    ₹1,200 give or take ₹177, 93% sure).
 
 ## Install on a real Android phone

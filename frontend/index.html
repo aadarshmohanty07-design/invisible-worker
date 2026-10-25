@@ -205,6 +205,10 @@
       </section>
     </main>
 
+    <button class="assistant-fab" id="assistant-btn" type="button" aria-label="Voice assistant" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+    </button>
+
     <button class="fab" id="fab" type="button" aria-label="Add a note" aria-haspopup="dialog">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" focusable="false"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
     </button>
@@ -268,6 +272,10 @@
               <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg></span>
               <span>Voice</span>
             </button>
+            <button class="capture" type="button" id="video-btn">
+              <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m23 7-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></span>
+              <span>Video</span>
+            </button>
             <button class="capture" type="button" id="type-btn">
               <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></span>
               <span>Type</span>
@@ -275,6 +283,7 @@
           </div>
 
           <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+          <input type="file" id="bill-input" accept="image/*" multiple hidden>
           <div class="draft" id="add-draft" hidden></div>
 
           <form class="add-form" id="add-form" hidden>
@@ -314,6 +323,13 @@
               <span>Amount ₹</span>
               <input id="add-amount" type="number" inputmode="decimal" step="any" min="1" placeholder="180" required>
             </label>
+            <div class="attach-tools">
+              <button class="btn btn--small btn--outline" type="button" id="bill-btn">Add bill photo</button>
+              <button class="btn btn--small btn--outline" type="button" id="context-btn">Link past note</button>
+            </div>
+            <div class="attach-list" id="attach-list"></div>
+            <div class="attach-list" id="context-list"></div>
+            <div class="context-picker" id="context-picker" hidden></div>
             <label class="field">
               <span>Note (optional)</span>
               <input id="add-text" placeholder="What was said or written" autocomplete="off">
@@ -351,6 +367,45 @@
             <button class="btn btn--primary btn--wide" type="submit">Save count</button>
             <p class="add-hint">We compare this with what you bought.</p>
           </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet" id="assistant-sheet" hidden>
+      <div class="sheet__backdrop" data-close-assistant></div>
+      <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="assistant-title">
+        <div class="sheet__grab" data-close-assistant aria-hidden="true"><span></span></div>
+        <div class="sheet__head">
+          <div>
+            <p class="eyebrow" id="assistant-eyebrow">Voice assistant</p>
+            <h2 id="assistant-title">Ask me</h2>
+          </div>
+          <button class="iconbtn" type="button" data-close-assistant aria-label="Close assistant">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="sheet__body">
+          <div class="assistant-top">
+            <button class="assistant-orb" id="assistant-orb" type="button" aria-label="Speak">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+            </button>
+            <div class="assistant-meta">
+              <p id="assistant-status">Tap the mic and speak</p>
+              <p class="faint" id="assistant-lang-label">English</p>
+            </div>
+          </div>
+          <div class="assistant-reply" id="assistant-reply"></div>
+          <div class="assistant-actions">
+            <button class="btn btn--small btn--outline" type="button" data-assistant-action="add">Add a note</button>
+            <button class="btn btn--small btn--outline" type="button" data-assistant-action="today">Today's money</button>
+            <button class="btn btn--small btn--outline" type="button" data-assistant-action="stock">Count stock</button>
+            <button class="btn btn--small btn--outline" type="button" data-assistant-action="sync">Sync</button>
+          </div>
+          <div class="assistant-lang-row">
+            <button class="btn btn--small btn--ghost" id="assistant-lang-btn" type="button">हिंदी</button>
+            <button class="btn btn--small btn--ghost" id="assistant-location-btn" type="button">Use my location</button>
+          </div>
+          <p class="add-hint" id="assistant-hint">Voice needs internet. The money book works offline.</p>
         </div>
       </div>
     </div>
