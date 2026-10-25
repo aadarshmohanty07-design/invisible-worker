@@ -1,26 +1,20 @@
 (() => {
   "use strict";
 
-  const SEED = {
-    audio: "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
-    ocr: "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
-    stock: "7c6b5a4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
-    sale: "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d",
-    credit: "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e",
-    pendingAudio: "4c5d6e7f-8a9b-4c1d-9e2f-3a4b5c6d7e8f",
-    pendingSms: "5d6e7f8a-9b0c-4d2e-8f3a-4b5c6d7e8f9a",
-    canonicalTx: "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
-  };
+  const SOURCE_CLASSES = new Set(["audio", "ocr", "sms", "manual"]);
 
   const TAB_SUBTITLES = {
-    today: "Today's numbers",
-    ledger: "All entries",
-    sync: "Devices and merge log",
-    more: "Scenarios, evidence, settings",
+    today: "Your money",
+    ledger: "All notes",
+    sync: "Saved here. Syncs later.",
+    more: "Stock and settings",
   };
 
-  const SOURCE_CLASSES = new Set(["audio", "ocr", "sms", "manual"]);
-  const DEVICE_STATUSES = new Set(["online", "offline", "syncing"]);
+  const SOURCE_NAMES = { audio: "Voice note", ocr: "Bill photo", sms: "SMS", manual: "Typed note" };
+  const STATUS_LABELS = { fused: "Checked", posted: "Saved", pending: "To check", voided: "Cancelled" };
+  const STATUS_TONES = { fused: "green", posted: "quiet", pending: "amber", voided: "red" };
+  const CAUSE_NAMES = { spoilage: "Rotted", theft: "Stolen", personal_consumption: "Taken home" };
+
   const LOSS_COLORS = {
     spoilage: "var(--amber-ink)",
     theft: "var(--red)",
@@ -32,21 +26,31 @@
     apiBase: initialApiBase(),
     tab: "today",
     ledgerFilter: "all",
-    health: null,
+    snapshot: null,
+    summary: null,
     ledger: [],
     events: [],
     devices: [],
-    summary: null,
-    loss: [],
-    credits: [],
-    recipes: [],
     truth: null,
-    lastMerge: null,
-    lastClock: null,
-    lastScenario: null,
-    pendingOnly: false,
+    notes: [],
+    stock: null,
+    syncInfo: null,
+    empty: true,
+    seed: false,
     actionBusy: false,
     firstRefreshDone: false,
+    add: {
+      kind: "typed",
+      direction: "out",
+      mediaBlob: null,
+      mediaUrl: null,
+      recording: false,
+      recorder: null,
+      stream: null,
+      chunks: [],
+      timer: null,
+      seconds: 0,
+    },
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -75,7 +79,8 @@
   const moneyFormatter = new Intl.NumberFormat("en-IN", {
     style: "currency",
     currency: "INR",
-    maximumFractionDigits: 2,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
   });
 
   function money(value) {
@@ -83,14 +88,15 @@
     return Number.isFinite(number) ? moneyFormatter.format(number) : "—";
   }
 
-  function signedMoney(value) {
-    const number = Number(value) || 0;
-    return `${number < 0 ? "−" : "+"}${money(Math.abs(number))}`;
-  }
-
   function num(value, digits = 2) {
     const number = Number(value);
     return Number.isFinite(number) ? number.toFixed(digits) : "—";
+  }
+
+  function qtyLabel(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "—";
+    return Number.isInteger(number) ? String(number) : String(Number(number.toFixed(2)));
   }
 
   function pct(value, digits = 0) {
@@ -133,12 +139,6 @@
     });
   }
 
-  function confidenceDelta(value) {
-    const number = Number(value) || 0;
-    const points = number * 100;
-    return `${points > 0 ? "+" : ""}${points.toFixed(0)} pts`;
-  }
-
   function fmtDate(value) {
     if (!value) return "—";
     const date = new Date(value);
@@ -162,9 +162,39 @@
     return String(entry.created_at || "").startsWith("1970");
   }
 
-  function shortDevice(deviceId) {
+  function phoneName(deviceId) {
     const suffix = String(deviceId || "").split("-").pop();
-    return suffix.length <= 2 ? suffix.toUpperCase() : String(deviceId);
+    return suffix && suffix.length <= 2 ? `Phone ${suffix.toUpperCase()}` : "This phone";
+  }
+
+  function sourceName(source) {
+    return SOURCE_NAMES[String(source)] || "Note";
+  }
+
+  function dayLabel(value) {
+    if (!value) return "Today";
+    const text = String(value);
+    const date = new Date(text.length === 10 ? `${text}T00:00:00` : text);
+    if (Number.isNaN(date.getTime())) return text;
+    return new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short" }).format(date);
+  }
+
+  function timeLabel(value) {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "";
+    return new Intl.DateTimeFormat("en-IN", { hour: "numeric", minute: "2-digit" }).format(date);
+  }
+
+  function entryInfo(entry) {
+    const debit = String(entry.debit?.account || "");
+    const credit = String(entry.credit?.account || "");
+    const name = (account) => account.split(":").slice(1).join(":").trim();
+    if (debit.startsWith("Inventory:")) return { title: `Bought ${name(debit).toLowerCase()}`, direction: "out" };
+    if (credit.startsWith("Sales:")) return { title: `Sold ${name(credit).toLowerCase()}`, direction: "in" };
+    if (credit.startsWith("Udhaar:")) return { title: `${name(credit)} paid back`, direction: "in" };
+    if (debit.startsWith("Udhaar:")) return { title: `Gave ${name(debit)} credit`, direction: "out" };
+    const incoming = debit === "Cash" && credit !== "Cash";
+    return { title: incoming ? "Money in" : "Money out", direction: incoming ? "in" : "out" };
   }
 
   function sourceClass(source) {
@@ -173,19 +203,7 @@
   }
 
   function statusTag(status) {
-    const classes = { fused: "green", posted: "blue", pending: "amber", voided: "red" };
-    return `<span class="tag tag--${classes[status] || "quiet"}">${esc(status)}</span>`;
-  }
-
-  function verdictTag(verdict) {
-    const classes = { agree: "green", disagree: "red", single_source: "quiet" };
-    const label = String(verdict || "").replace(/_/g, " ");
-    return `<span class="tag tag--${classes[verdict] || "quiet"}">${esc(label)}</span>`;
-  }
-
-  function deviceStatusClass(status) {
-    const value = String(status);
-    return DEVICE_STATUSES.has(value) ? value : "offline";
+    return `<span class="tag tag--${STATUS_TONES[status] || "quiet"}">${STATUS_LABELS[status] || esc(status)}</span>`;
   }
 
   function truncate(value, max = 88) {
@@ -206,41 +224,6 @@
   }
 
   const CHEVRON = '<span class="entry__chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>';
-
-  async function api(path, options = {}) {
-    const { method = "GET", body, headers = {} } = options;
-    const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 15000);
-    try {
-      const response = await fetch(`${state.apiBase}${path}`, {
-        method,
-        headers: {
-          Accept: "application/json",
-          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
-          ...headers,
-        },
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: controller.signal,
-      });
-      const text = await response.text();
-      let payload = null;
-      try {
-        payload = text ? JSON.parse(text) : null;
-      } catch {
-        payload = text;
-      }
-      if (!response.ok) {
-        const detail = payload && typeof payload === "object" ? payload.detail : payload;
-        throw new Error(`${response.status} ${detail || response.statusText}`);
-      }
-      return payload;
-    } catch (error) {
-      if (error.name === "AbortError") throw new Error("The request timed out.");
-      throw error;
-    } finally {
-      window.clearTimeout(timeout);
-    }
-  }
 
   function setStatus(mode, text) {
     const status = $("#api-status");
@@ -278,7 +261,7 @@
 
   async function runAction(button, action) {
     if (state.actionBusy) {
-      toast("Another demo action is still running.", "error");
+      toast("Wait for the other step to finish.", "error");
       return;
     }
     state.actionBusy = true;
@@ -308,9 +291,9 @@
         document.execCommand("copy");
         area.remove();
       }
-      toast("Copied to clipboard.");
+      toast("Copied.");
     } catch {
-      toast("Could not copy. Select the text manually.", "error");
+      toast("Could not copy. Press and hold the text.", "error");
     }
   }
 
@@ -340,14 +323,17 @@
     const sheet = $(id);
     if (!sheet || sheet.hidden) return;
     sheet.hidden = true;
-    if ($("#receipt-sheet").hidden && $("#actions-sheet").hidden) {
-      document.body.style.overflow = "";
-    }
+    const anyOpen = ["#receipt-sheet", "#add-sheet", "#stock-sheet"].some((selector) => {
+      const element = $(selector);
+      return element && !element.hidden;
+    });
+    if (!anyOpen) document.body.style.overflow = "";
   }
 
   function closeAllSheets() {
     closeSheet("#receipt-sheet");
-    closeSheet("#actions-sheet");
+    closeAddSheet();
+    closeSheet("#stock-sheet");
   }
 
   function hideSplash() {
@@ -358,60 +344,42 @@
     window.setTimeout(() => splash.remove(), 600);
   }
 
-  async function refreshAll({ quiet = false } = {}) {
-    if (!quiet) setStatus("busy", "Refreshing");
-    const requests = [
-      api("/health"),
-      api("/ledger"),
-      api("/events"),
-      api("/devices"),
-      api("/summary"),
-      api("/loss"),
-      api("/truth/daily"),
-      api("/credits"),
-      api("/recipes"),
-    ];
-    const keys = ["health", "ledger", "events", "devices", "summary", "loss", "truth", "credits", "recipes"];
-    const results = await Promise.allSettled(requests);
-    const failures = [];
-
-    results.forEach((result, index) => {
-      const key = keys[index];
-      if (result.status === "fulfilled") {
-        state[key] = result.value;
-      } else {
-        failures.push({ key, error: result.reason });
-        if (key === "health") state.health = null;
-      }
-    });
-
-    const healthOk = Boolean(state.health);
-    if (!healthOk) {
-      setStatus("error", "Offline");
-      const first = failures.find((failure) => failure.key === "health") || failures[0];
-      showBanner(first?.error?.message || "The API could not be reached.");
-    } else if (failures.length) {
-      setStatus("ok", "Live");
-      showBanner(`Some data could not load: ${failures[0].error.message}`);
-    } else {
-      setStatus("ok", "Live");
+  async function refreshLocal() {
+    try {
+      const snapshot = await IWLocal.snapshot();
+      state.snapshot = snapshot;
+      state.summary = snapshot.summary;
+      state.ledger = snapshot.ledger;
+      state.events = snapshot.events;
+      state.devices = snapshot.devices;
+      state.truth = snapshot.truth;
+      state.notes = snapshot.notes;
+      state.syncInfo = snapshot.syncInfo;
+      state.stock = snapshot.stock;
+      state.empty = snapshot.empty;
+      state.seed = snapshot.seed;
+      setStatus("ok", "Saved");
       hideBanner();
-    }
-
-    renderAll();
-
-    if (!state.firstRefreshDone) {
-      state.firstRefreshDone = true;
-      window.setTimeout(hideSplash, 300);
-      window.setTimeout(() => countUp(), 380);
-    } else {
-      countUp();
+      renderAll();
+      if (!state.firstRefreshDone) {
+        state.firstRefreshDone = true;
+        window.setTimeout(hideSplash, 260);
+        window.setTimeout(() => countUp(), 340);
+      } else {
+        countUp();
+      }
+    } catch (error) {
+      console.error(error);
+      setStatus("error", "Problem");
+      showBanner("Could not read the notes on this phone. Reload the app.");
     }
   }
 
   /* ---------- Renderers ---------- */
 
   function renderAll() {
+    const numbersFold = $("#numbers-fold");
+    if (numbersFold) numbersFold.hidden = state.notes.length === 0;
     renderStatus();
     renderProfit();
     renderMoneyShot();
@@ -422,26 +390,39 @@
     renderLedger();
     renderDevices();
     renderMergeLog();
-    renderClockResult();
     renderOrder();
     renderEvents();
-    renderExtras();
-    renderScenario();
-    renderApiLinks();
   }
 
   function renderStatus() {
-    const version = $("#health-version");
     const businessDate = $("#business-date");
-    version.textContent = state.health ? `API v${state.health.version}` : "API —";
-    businessDate.textContent = state.truth?.business_date || state.summary?.time_period || "No day loaded";
+    const dayNote = $("#day-note");
+    const seedPill = $("#seed-pill");
+    const total = state.notes.length;
+    businessDate.textContent = dayLabel(state.snapshot?.day || new Date());
+    dayNote.textContent = total > 0 ? `${total} notes` : "No notes";
+    if (seedPill) seedPill.hidden = !state.seed;
+    const deviceLine = $("#device-line");
+    if (deviceLine) {
+      deviceLine.textContent = total > 0
+        ? `${total} note${total === 1 ? "" : "s"} saved on this phone. It works without internet.`
+        : "Notes are saved here, even without internet.";
+    }
   }
 
   function renderProfit() {
     const card = $("#profit-card");
     const summary = state.summary;
-    if (!summary) {
-      card.innerHTML = emptyState("No profit summary loaded. Check the API connection in More → Settings.");
+    if (state.empty || !summary) {
+      card.innerHTML = `
+        <p class="eyebrow">Today</p>
+        <p class="hero-amount">₹0</p>
+        <p class="hero-sub">No notes yet. Add what you spent or got.</p>
+        <div class="button-row">
+          <button class="btn btn--light" type="button" data-action="add-note">Add a note</button>
+          <button class="btn btn--hero-line" type="button" data-action="load-example">See an example day</button>
+        </div>
+      `;
       return;
     }
     const evidence = state.truth?.evidence_summary || {};
@@ -452,14 +433,12 @@
     const offset = Number.isFinite(avgConf)
       ? circumference * (1 - Math.max(0, Math.min(1, avgConf)))
       : circumference;
-    const fused = evidence.fused_entries ?? "—";
-    const suspect = evidence.suspect_clock_events ?? "—";
     card.innerHTML = `
       <div class="hero-top">
         <div>
-          <p class="eyebrow">True profit · ${esc(summary.time_period)}</p>
+          <p class="eyebrow">You made today</p>
           <p class="hero-amount" data-count="${Number(summary.profit_mean)}" data-count-format="money" data-count-key="profit">${money(summary.profit_mean)}</p>
-          <p class="hero-sub">± ${money(summary.profit_std_dev)} one-sigma band</p>
+          <p class="hero-sub">Give or take ${money(summary.profit_std_dev)}</p>
         </div>
         <div class="conf-ring">
           <svg width="56" height="56" viewBox="0 0 48 48" aria-hidden="true">
@@ -473,54 +452,56 @@
       </div>
       <div class="range-bar" aria-hidden="true"><span class="range-bar__fill" style="left:15%;width:70%"></span></div>
       <div class="range-labels"><span>${money(low)}</span><span>${money(high)}</span></div>
-      <dl class="mini-grid">
-        <div><dt>Revenue</dt><dd>${money(summary.revenue_mean)} <span>± ${money(summary.revenue_std_dev)}</span></dd></div>
-        <div><dt>COGS</dt><dd>${money(summary.cogs_mean)} <span>± ${money(summary.cogs_std_dev)}</span></dd></div>
-        <div><dt>Hidden loss</dt><dd>${money(summary.loss_mean)} <span>± ${money(summary.loss_std_dev)}</span></dd></div>
-        <div><dt>Evidence</dt><dd>${esc(fused)} fused <span>· ${esc(suspect)} suspect</span></dd></div>
-      </dl>
-      <p class="hero-foot">Profit = revenue − COGS − hidden loss. Each term carries its own uncertainty.</p>
+      <div class="money-rows">
+        <div class="money-row"><span>Money in</span><strong>${money(summary.revenue_mean)}</strong></div>
+        <div class="money-row"><span>Money out</span><strong>${money(summary.cogs_mean)}</strong></div>
+        <div class="money-row"><span>Missing</span><strong>${money(summary.loss_mean)}</strong></div>
+      </div>
     `;
   }
 
   function renderMoneyShot() {
     const card = $("#money-shot-card");
-    const entry = findLedger(SEED.canonicalTx);
+    const seedEntry = findLedger("seed-tomato");
+    const entry = seedEntry || [...state.ledger].sort((a, b) => b.logical_clock - a.logical_clock)[0];
     if (!entry) {
-      card.innerHTML = `${emptyState("The canonical tomato entry is missing. Reset the demo to restore it.")}
-        <div class="button-row"><button class="btn btn--primary" type="button" data-action="reset">Reset demo</button></div>`;
+      card.hidden = true;
+      card.innerHTML = "";
       return;
     }
+    card.hidden = false;
     const sourceEvents = entry.event_ids.map(findEvent).filter(Boolean);
-    const chips = sourceEvents.map((event) => `
-      <span class="chip chip--${sourceClass(event.source)}">${esc(event.source)} · ${esc(shortDevice(event.device_id))}</span>
-    `).join("");
+    const sourceKinds = [...new Set(sourceEvents.map((event) => event.source))];
+    const suspect = sourceEvents.some((event) => isSuspectWallClock(event.wall_clock));
+    const qty = entry.debit.qty_mean != null ? `${num(entry.debit.qty_mean, 0)} ${entry.debit.unit || ""}`.trim() : "";
+    const count = entry.event_ids.length;
+    const headline = seedEntry ? "Tomato bill" : "Latest note";
     card.innerHTML = `
       <div class="card__head">
-        <div><p class="eyebrow">Money shot</p><h3>Fused tomato purchase</h3></div>
-        ${entry.clock_suspect ? '<span class="tag tag--red">1970 clock</span>' : ""}
+        <div><h3>${headline}</h3></div>
+        ${statusTag(entry.status)}
       </div>
       <p class="shot-amount" data-count="${Number(entry.debit.amount_mean)}" data-count-format="money" data-count-key="shot:${esc(entry.transaction_id)}">${money(entry.debit.amount_mean)}</p>
-      <div class="sub-number">± ${money(entry.debit.amount_std_dev)} <span>1σ</span></div>
-      <p class="shot-account">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</p>
-      <div class="evidence-chips">${chips || '<span class="chip">Evidence attached</span>'}</div>
-      <div class="entry__meter">
-        <span class="muted">${pct(entry.confidence, 0)} confident</span>
-        <div class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></div>
-        <span class="muted">${entry.event_ids.length} lines</span>
-      </div>
+      <p class="sub-number">Give or take ${money(entry.debit.amount_std_dev)}</p>
+      <p class="shot-line">${count > 1 ? `${count} notes agree` : "One note"}: ${money(entry.debit.amount_mean)}${qty ? ` for ${esc(qty)}` : ""}.</p>
+      <div class="evidence-chips">${sourceKinds.map((source) => `<span class="chip chip--${sourceClass(source)}">${sourceName(source)}</span>`).join("")}</div>
+      ${suspect ? '<p class="faint" style="margin:8px 0 0">One note had a wrong date. We still used it.</p>' : ""}
       <div class="button-row">
-        <button class="btn btn--primary" type="button" data-explain="${esc(entry.transaction_id)}">Open Trust Receipt</button>
-        <button class="btn btn--ghost" type="button" data-action="money-shot">Re-run fusion</button>
+        <button class="btn btn--primary" type="button" data-explain="${esc(entry.transaction_id)}">Why ${money(entry.debit.amount_mean)}?</button>
       </div>
     `;
   }
 
   function renderGhost() {
     const card = $("#ghost-card");
+    card.hidden = false;
     const reconciliation = state.truth?.reconciliation;
     if (!reconciliation) {
-      card.innerHTML = emptyState("Ghost inventory is unavailable. Check /truth/daily.");
+      card.innerHTML = `
+        <div class="card__head"><div><h3>Stock check</h3></div></div>
+        <p class="stock-line">No count yet. Count what is left to see what is missing.</p>
+        <div class="button-row"><button class="btn btn--outline" type="button" data-action="open-stock">Count stock</button></div>
+      `;
       return;
     }
     const expected = Number(reconciliation.expected_on_hand_qty) || 0;
@@ -528,25 +509,31 @@
     const countedPct = expected > 0 ? Math.max(0, Math.min(100, (counted / expected) * 100)) : 0;
     const missingPct = Math.max(0, 100 - countedPct);
     const consistent = Boolean(reconciliation.consistent_within_1_sigma);
+    const usual = Number(reconciliation.modeled_loss_qty_mean);
     card.innerHTML = `
       <div class="card__head">
-        <div><p class="eyebrow">Ghost inventory</p><h3>Counted vs expected stock</h3></div>
+        <div><h3>Stock check</h3></div>
         <span class="tag tag--amber">${esc(reconciliation.item)}</span>
       </div>
-      <div class="ghost-number">${num(reconciliation.missing_qty, 3)} kg <small>≈ ${money(reconciliation.missing_value)}</small></div>
+      <p class="ghost-number">${num(reconciliation.missing_qty, 1)} kg short <small>about ${money(reconciliation.missing_value)}</small></p>
+      <p class="stock-line">You counted ${num(counted, 1)} kg. The book expected ${num(expected, 1)} kg.</p>
       <div class="stock-bar" aria-hidden="true">
         <span class="stock-bar__expected"></span>
         <span class="stock-bar__counted" style="width:${countedPct}%"></span>
         <span class="stock-bar__missing" style="width:${missingPct}%"></span>
       </div>
-      <div class="stock-legend"><span>Counted ${num(counted, 3)} kg</span><span>Expected ${num(expected, 3)} kg</span></div>
-      <div class="consistency${consistent ? "" : " consistency--warn"}">
-        <span aria-hidden="true">●</span>
-        <span>${consistent ? "Inside the loss model's 1σ band" : "Outside the loss model's 1σ band"}<br>
-          <span class="muted">Model ${num(reconciliation.modeled_loss_qty_mean)} ± ${num(reconciliation.modeled_loss_qty_std_dev)} kg · ${money(reconciliation.modeled_loss_value_mean)} ± ${money(reconciliation.modeled_loss_value_std_dev)}</span>
-        </span>
-      </div>
+      <div class="stock-legend"><span>Counted ${num(counted, 1)} kg</span><span>Expected ${num(expected, 1)} kg</span></div>
+      <p class="consistency${consistent ? "" : " consistency--warn"}">${consistent ? "Within the usual loss." : "More than usual."} About ${num(usual, 1)} kg goes missing on a normal day.</p>
     `;
+  }
+
+  function stepName(label) {
+    const text = String(label);
+    if (/revenue/i.test(text)) return "Money in";
+    if (/cogs|cost/i.test(text)) return "Money out";
+    if (/loss/i.test(text)) return "Missing";
+    if (/profit/i.test(text)) return "You made";
+    return text;
   }
 
   function renderWaterfall() {
@@ -559,68 +546,54 @@
       { label: "True profit", amount_mean: summary.profit_mean, amount_std_dev: summary.profit_std_dev },
     ] : []);
     if (!steps.length) {
-      card.innerHTML = emptyState("The profit waterfall is unavailable.");
+      card.innerHTML = emptyState("The breakdown is unavailable.");
       return;
     }
     const maxAbs = Math.max(1, ...steps.map((step) => Math.abs(Number(step.amount_mean) || 0)));
     const rows = steps.map((step) => {
-      const isTotal = step.label === "True profit";
+      const isTotal = /profit/i.test(step.label);
       const isNegative = Number(step.amount_mean) < 0;
       const width = Math.max(2, (Math.abs(Number(step.amount_mean) || 0) / maxAbs) * 100);
       return `
         <div class="waterfall__row${isTotal ? " waterfall__row--total" : ""}">
-          <span class="waterfall__label">${esc(step.label)}</span>
+          <span class="waterfall__label">${esc(stepName(step.label))}</span>
           <div class="waterfall__track" aria-hidden="true"><span class="waterfall__bar${isNegative ? " waterfall__bar--negative" : ""}${isTotal ? " waterfall__bar--total" : ""}" style="width:${width}%"></span></div>
-          <span class="waterfall__value">${signedMoney(step.amount_mean)} <span class="faint">± ${money(step.amount_std_dev)}</span></span>
+          <span class="waterfall__value">${money(Math.abs(Number(step.amount_mean) || 0))} <span class="faint">give or take ${money(step.amount_std_dev)}</span></span>
         </div>`;
     }).join("");
     card.innerHTML = `
-      <div class="card__head"><div><h3>Profit breakdown</h3></div><span class="muted">1σ bands</span></div>
+      <div class="card__head"><div><h3>Money in and out</h3></div></div>
       <div class="waterfall">${rows}</div>
     `;
   }
 
   function renderLoss() {
     const card = $("#loss-card");
-    const loss = state.loss?.[0];
-    const components = state.truth?.loss_components || loss?.components || [];
+    const components = state.truth?.loss_components || [];
     if (!components.length) {
-      card.innerHTML = emptyState("Loss attribution is unavailable.");
+      card.hidden = true;
+      card.innerHTML = "";
       return;
     }
+    card.hidden = false;
     const stack = components.map((component) => {
       const width = Math.max(0, Math.min(100, Number(component.share_mean) * 100));
       const color = LOSS_COLORS[component.cause] || LOSS_FALLBACK;
-      return `<span style="width:${width}%;background:${color}" title="${esc(component.cause)}"></span>`;
+      return `<span style="width:${width}%;background:${color}" title="${esc(CAUSE_NAMES[component.cause] || component.cause)}"></span>`;
     }).join("");
     const rows = components.map((component) => {
       const color = LOSS_COLORS[component.cause] || LOSS_FALLBACK;
       return `
-        <div>
-          <div class="loss-legend__row">
-            <span class="loss-legend__name"><span class="swatch" style="background:${color}"></span>${esc(String(component.cause).replace(/_/g, " "))}</span>
-            <span class="loss-legend__value">${pct(component.share_mean, 1)} <span class="faint">± ${pct(component.share_std_dev, 1)}</span></span>
-          </div>
-          <p class="loss-driver">${esc(component.driver)}</p>
+        <div class="loss-legend__row">
+          <span class="loss-legend__name"><span class="swatch" style="background:${color}"></span>${esc(CAUSE_NAMES[component.cause] || String(component.cause).replace(/_/g, " "))}</span>
+          <span class="loss-legend__value">${pct(component.share_mean, 0)}</span>
         </div>`;
     }).join("");
-    const value = loss?.value_lost;
-    const quantiles = value
-      ? `<div class="loss-quantiles">
-          <span>q05 ${money(value.q05)}</span>
-          <span>q50 ${money(value.q50)}</span>
-          <span>q95 ${money(value.q95)}</span>
-          <span>α ${esc((loss.allocation?.alpha || []).join(" / "))}</span>
-        </div>`
-      : "";
+    const total = Number(state.summary?.loss_mean);
     card.innerHTML = `
-      <div class="card__head">
-        <div><p class="eyebrow">Hidden loss</p><h3>Spoilage, theft, household</h3></div>
-        <span class="muted">Dirichlet</span>
-      </div>
+      <div class="card__head"><div><h3>${Number.isFinite(total) ? `Where the missing ${money(total)} went` : "Where the missing money went"}</h3></div></div>
       <div class="loss-stack" aria-hidden="true">${stack}</div>
       <div class="loss-legend">${rows}</div>
-      ${quantiles}
     `;
   }
 
@@ -628,45 +601,38 @@
     const card = $("#evidence-card");
     const truth = state.truth;
     if (!truth) {
-      card.innerHTML = emptyState("Daily evidence is unavailable.");
+      card.innerHTML = emptyState("No notes yet.");
       return;
     }
     const evidence = truth.evidence_summary;
-    const stats = [
-      ["Events", evidence.total_events],
-      ["Fused", evidence.fused_entries],
-      ["Confidence", pct(evidence.average_confidence, 0)],
-      ["Rescued", evidence.hostile_clock_recoveries],
-    ];
-    const sourceMix = Object.entries(evidence.source_mix)
-      .map(([source, count]) => `<span class="chip chip--${sourceClass(source)}">${esc(source)} ${esc(count)}</span>`)
+    const mix = Object.entries(evidence.source_mix || {})
+      .map(([source, count]) => `<span class="chip chip--${sourceClass(source)}">${sourceName(source)} ${esc(count)}</span>`)
       .join("");
-    const actions = (truth.actions || []).map((action) => `<li>${esc(action)}</li>`).join("");
     card.innerHTML = `
-      <div class="card__head">
-        <div><h3>Evidence summary</h3></div>
+      <div class="card__head"><div><h3>Today's notes</h3></div></div>
+      <div class="receipt-compare">
+        <div><span>Notes that came in</span><strong>${esc(evidence.total_events)}</strong></div>
+        <div><span>Two notes, one record</span><strong>${esc(evidence.fused_entries)}</strong></div>
+        <div><span>Wrong date</span><strong>${esc(evidence.suspect_clock_events)}</strong></div>
+        <div><span>How sure on average</span><strong>${pct(evidence.average_confidence, 0)}</strong></div>
       </div>
-      <div class="evidence-grid">
-        ${stats.map(([label, value]) => `<div class="stat"><div class="stat__label">${esc(label)}</div><div class="stat__value">${esc(value)}</div></div>`).join("")}
-      </div>
-      <div class="evidence-chips">${sourceMix}</div>
-      <p class="muted" style="margin:10px 0 0">${esc(truth.narrative)}</p>
-      <ul class="action-list">${actions}</ul>
+      <div class="evidence-chips">${mix}</div>
       <div class="fingerprint">
-        <span class="faint">SHA-256 ledger fingerprint</span>
+        <span class="faint">Proof code</span>
         <code>${esc(truth.ledger_fingerprint)}</code>
       </div>
       <div class="button-row">
-        <button class="btn btn--small btn--outline" type="button" data-copy="${esc(truth.ledger_fingerprint)}">Copy fingerprint</button>
+        <button class="btn btn--small btn--outline" type="button" data-copy="${esc(truth.ledger_fingerprint)}">Copy proof code</button>
       </div>
     `;
   }
 
   function ledgerMatchesFilter(entry) {
     if (state.ledgerFilter === "all") return true;
-    if (state.ledgerFilter === "fused") return entry.status === "fused";
+    if (state.ledgerFilter === "in" || state.ledgerFilter === "out") {
+      return entryInfo(entry).direction === state.ledgerFilter;
+    }
     if (state.ledgerFilter === "pending") return entry.status === "pending";
-    if (state.ledgerFilter === "suspect") return is1970(entry) || entry.clock_suspect;
     return true;
   }
 
@@ -674,37 +640,33 @@
     const list = $("#ledger-list");
     const entries = state.ledger.filter(ledgerMatchesFilter);
     if (!state.ledger.length) {
-      list.innerHTML = emptyState("No ledger entries. Reset the demo from More.");
+      list.innerHTML = emptyState("No records yet. Start over from More.");
       return;
     }
     if (!entries.length) {
-      list.innerHTML = emptyState("No entries match this filter.");
+      list.innerHTML = emptyState("Nothing here.");
       return;
     }
     list.innerHTML = entries.map((entry) => {
-      const canonical = entry.transaction_id === SEED.canonicalTx;
-      const probe = is1970(entry);
-      const qty = entry.debit.qty_mean != null ? ` · ${num(entry.debit.qty_mean, 3)} ${esc(entry.debit.unit || "")}` : "";
-      const sourceChips = entry.event_ids.map(findEvent).filter(Boolean)
-        .slice(0, 3)
-        .map((event) => `<span class="chip chip--${sourceClass(event.source)}">${esc(event.source)}</span>`)
-        .join("");
+      const info = entryInfo(entry);
+      const probe = is1970(entry) || entry.clock_suspect;
+      const sources = [...new Set(entry.event_ids.map(findEvent).filter(Boolean).map((event) => sourceName(event.source)))];
+      const qty = entry.debit.qty_mean != null ? `${qtyLabel(entry.debit.qty_mean)} ${entry.debit.unit || ""}`.trim() : "";
+      const range = Number(entry.debit.amount_std_dev) > 0 ? `give or take ${money(entry.debit.amount_std_dev)}` : "";
       return `
-        <button class="entry${canonical ? " is-canonical" : ""}${probe ? " is-probe" : ""}" type="button" data-explain="${esc(entry.transaction_id)}">
+        <button class="entry" type="button" data-explain="${esc(entry.transaction_id)}">
           <span class="entry__top">
-            <span class="entry__clock">${esc(entry.logical_clock)}</span>
+            <span class="entry__title">${esc(info.title)}</span>
             ${statusTag(entry.status)}
-            ${probe ? '<span class="tag tag--red">1970</span>' : (entry.clock_suspect ? '<span class="tag tag--red">clock</span>' : "")}
-            <span class="entry__device">${esc(shortDevice(entry.device_id))}</span>
+            ${probe ? '<span class="tag tag--red">Wrong date</span>' : ""}
           </span>
-          <span class="entry__accounts">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</span>
-          <span class="entry__amount"><strong data-count="${Number(entry.debit.amount_mean)}" data-count-format="money" data-count-key="entry:${esc(entry.transaction_id)}">${money(entry.debit.amount_mean)}</strong><span>± ${money(entry.debit.amount_std_dev)}${qty}</span></span>
-          <span class="entry__meter">
-            <span class="muted">${pct(entry.confidence, 0)}</span>
-            <span class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></span>
+          <span class="entry__amount">
+            <strong>${info.direction === "out" ? "− " : "+ "}<span data-count="${Number(entry.debit.amount_mean)}" data-count-format="money" data-count-key="entry:${esc(entry.transaction_id)}">${money(entry.debit.amount_mean)}</span></strong>
+            ${range ? `<span>${range}</span>` : ""}
           </span>
+          <span class="entry__sub">${esc([qty, sources.join(" + ")].filter(Boolean).join(" · "))}</span>
           <span class="entry__foot">
-            <span class="entry__evidence">${entry.event_ids.length} evidence line${entry.event_ids.length === 1 ? "" : "s"} ${sourceChips}</span>
+            <span class="entry__sure">${pct(entry.confidence, 0)} sure</span>
             ${CHEVRON}
           </span>
         </button>`;
@@ -714,457 +676,548 @@
   function renderDevices() {
     const grid = $("#device-grid");
     if (!state.devices.length) {
-      grid.innerHTML = emptyState("Device state is unavailable.");
+      grid.innerHTML = emptyState("This phone is not set up yet.");
       return;
     }
     grid.innerHTML = state.devices.map((device) => `
       <article class="device">
         <div class="device__top">
-          <span class="device__name">${esc(device.device_id)}</span>
-          <span class="device__status"><span class="dot ${deviceStatusClass(device.status)}"></span>${esc(device.status)}</span>
+          <span class="device__name">${esc(device.label || phoneName(device.device_id))}</span>
+          <span class="device__status"><span class="dot online"></span>${device.status === "saved" ? "Saved here" : "Synced"}</span>
         </div>
-        <div class="device__meta">
-          <span>Last merged<strong>${esc(device.last_merged_logical_clock)}</strong></span>
-          <span>Conflicts<strong>${esc(device.conflicts_resolved)}</strong></span>
-        </div>
-      </article>
-    `).join("");
+        <p class="device__line">${Number(device.notes) || 0} note${device.notes === 1 ? "" : "s"}</p>
+      </article>`).join("");
   }
 
   function renderMergeLog() {
     const card = $("#merge-log-card");
-    if (!state.lastMerge) {
+    if (!state.syncInfo) {
       card.innerHTML = `
-        <div class="card__head"><h3>Merge log</h3><span class="muted">Last sync</span></div>
-        <p class="log__empty">Run Sync devices. Reset first to replay the seeded three-conflict merge.</p>
+        <div class="card__head"><div><h3>Sync</h3></div></div>
+        <p class="log__empty">Tap “Sync with shop” to look for notes from another phone.</p>
       `;
       return;
     }
-    const result = state.lastMerge;
+    const info = state.syncInfo;
+    const parts = [];
+    if (info.pulled) parts.push(`${info.pulled} note${info.pulled === 1 ? "" : "s"} came from another phone.`);
+    if (info.pushed) parts.push(`${info.pushed} note${info.pushed === 1 ? "" : "s"} sent.`);
+    if (!parts.length) parts.push("Everything was already on this phone.");
     card.innerHTML = `
-      <div class="card__head"><h3>Merge log</h3><span class="tag tag--green">${esc(result.conflicts_resolved)} conflicts</span></div>
-      <div class="log">${esc((result.merge_log || []).join("\n"))}</div>
-    `;
-  }
-
-  function renderClockResult() {
-    const card = $("#clock-result-card");
-    if (!state.lastClock) {
-      card.innerHTML = `
-        <div class="card__head"><h3>Hostile clock</h3><span class="muted">Last simulation</span></div>
-        <p class="log__empty">Run “1970 clock” to append a hostile-clock probe and prove the ledger order survives.</p>
-      `;
-      return;
-    }
-    const result = state.lastClock;
-    card.innerHTML = `
-      <div class="card__head">
-        <h3>Hostile clock</h3>
-        ${result.history_preserved ? '<span class="tag tag--green">history preserved</span>' : '<span class="tag tag--red">history at risk</span>'}
-      </div>
-      <div class="clock-result">
-        <div class="clock-result__message">${esc(result.message)}</div>
-        <div class="kv"><span>Detected wall clock</span><span>${esc(fmtDate(result.detected_wall_clock))}</span></div>
-        <div class="kv"><span>Logical clock used</span><span>${esc(result.logical_clock_used)}</span></div>
-        <div class="log">${esc((result.merge_log || []).join("\n"))}</div>
-      </div>
+      <div class="card__head"><div><h3>Sync</h3></div><span class="tag tag--green">Done</span></div>
+      <p class="result-line">${parts.join(" ")}</p>
+      <p class="faint" style="margin:8px 0 0">Checked ${esc(fmtDate(info.at))}</p>
     `;
   }
 
   function renderOrder() {
     const order = $("#ledger-order");
     const proof = $("#probe-proof");
-    if (!state.ledger.length) {
+    if (!state.notes.length) {
       order.innerHTML = "";
-      proof.textContent = "No ledger entries.";
+      proof.textContent = "No notes yet.";
       return;
     }
-    order.innerHTML = state.ledger.map((entry) => {
-      const probe = is1970(entry);
-      const canonical = entry.transaction_id === SEED.canonicalTx;
-      const classes = ["order-pill"];
-      if (probe) classes.push("order-pill--probe");
-      if (canonical) classes.push("order-pill--canonical");
-      return `<span class="${classes.join(" ")}" title="${esc(entry.transaction_id)}"><strong>${esc(entry.logical_clock)}</strong> ${esc(shortDevice(entry.device_id))}</span>`;
+    order.innerHTML = state.notes.map((note) => {
+      const wrong = IWLocal.isWrongClock(note.createdAt);
+      const label = note.deviceId === IWLocal.deviceId() ? "This phone" : phoneName(note.deviceId);
+      return `<span class="order-pill${wrong ? " order-pill--probe" : ""}"><strong>${esc(note.order)}</strong> ${esc(label)}</span>`;
     }).join("");
-    const probeEntry = state.ledger.find(is1970);
-    if (!probeEntry) {
-      proof.textContent = "No hostile-clock probe yet. Run “1970 clock” to append one.";
+    const wrongIndex = state.notes.findIndex((note) => IWLocal.isWrongClock(note.createdAt));
+    if (wrongIndex < 0) {
+      proof.textContent = "No note with a wrong date yet.";
       return;
     }
-    const index = state.ledger.indexOf(probeEntry);
-    const first = state.ledger[0];
-    proof.innerHTML = `1970 probe at position <strong>${index + 1} of ${state.ledger.length}</strong>; first entry is <strong>${esc(first.device_id)} at clock ${esc(first.logical_clock)}</strong>. ${index > 0 ? "<strong>History preserved.</strong>" : "<strong>Unexpected: probe is first.</strong>"}`;
+    proof.innerHTML = `The wrong-date note is number <strong>${wrongIndex + 1}</strong> of ${state.notes.length}, not number 1.`;
   }
 
   function renderEvents() {
     const list = $("#events-body");
-    const used = new Set(state.ledger.flatMap((entry) => entry.event_ids));
-    const events = state.events.filter((event) => !state.pendingOnly || !used.has(event.event_id));
-    if (!events.length) {
-      list.innerHTML = emptyState("No events match the current filter.");
+    if (!state.events.length) {
+      list.innerHTML = emptyState("No notes on this phone yet.");
       return;
     }
-    list.innerHTML = events.map((event) => {
+    list.innerHTML = state.events.map((event) => {
       const entity = event.extracted_entities?.[0];
       const entityText = entity
-        ? `${entity.item} · ${num(entity.qty, 2)} ${esc(entity.unit)}${entity.price != null ? ` · ${money(entity.price)}` : ""}`
-        : "No parsed line";
-      const suspect = isSuspectWallClock(event.wall_clock) ? '<span class="tag tag--red">suspect</span>' : "";
-      const usedState = used.has(event.event_id)
-        ? '<span class="tag tag--quiet">in ledger</span>'
-        : '<span class="tag tag--amber">pending</span>';
+        ? `${esc(entity.item)} · ${qtyLabel(entity.qty)} ${esc(entity.unit)}${entity.price != null ? ` · ${money(entity.price)}` : ""}`
+        : "No item was read";
+      const wrong = isSuspectWallClock(event.wall_clock);
       return `
         <div class="event">
           <div class="event__top">
-            <span class="chip chip--${sourceClass(event.source)}">${esc(event.source)}</span>
-            ${usedState}
-            ${suspect}
-            <span class="event__device">${esc(shortDevice(event.device_id))} · ${esc(event.logical_clock)}</span>
+            <span class="chip chip--${sourceClass(event.source)}">${esc(sourceName(event.source))}</span>
+            ${wrong ? '<span class="tag tag--red">Wrong date</span>' : ""}
+            <span class="event__device">${esc(event.device_label || phoneName(event.device_id))}${wrong ? "" : ` · ${esc(timeLabel(event.wall_clock))}`}</span>
           </div>
           <div class="event__text">${esc(truncate(event.raw_text, 110) || "—")}</div>
           <div class="event__meta">
-            <span>${esc(entityText)}</span>
-            <span class="mono">${esc(fmtDate(event.wall_clock))}</span>
+            <span>${entityText}</span>
           </div>
         </div>`;
     }).join("");
   }
 
-  function renderSeedIds() {
-    const seeds = [
-      ["Audio evidence", SEED.audio],
-      ["OCR receipt", SEED.ocr],
-      ["Stock count", SEED.stock],
-      ["Poha sale", SEED.sale],
-      ["Credit SMS", SEED.credit],
-      ["Pending audio", SEED.pendingAudio],
-      ["Pending SMS", SEED.pendingSms],
-      ["Canonical transaction", SEED.canonicalTx],
-    ];
-    $("#seed-list").innerHTML = seeds.map(([label, id]) => `
-      <div class="seed-item">
-        <div><span class="seed-item__label">${esc(label)}</span><code class="seed-item__id">${esc(id)}</code></div>
-        <button class="btn btn--small btn--ghost" type="button" data-copy="${esc(id)}">Copy</button>
-      </div>
-    `).join("");
-  }
-
-  function renderExtras() {
-    const credits = $("#credits-card");
-    if (!state.credits.length) {
-      credits.innerHTML = emptyState("No customer credit loaded.");
-    } else {
-      credits.innerHTML = `
-        <div class="card__head"><div><p class="eyebrow">Udhaar</p><h3>Customer credit</h3></div><span class="muted">${state.credits.length} aliases</span></div>
-        <div class="extra-list">
-          ${state.credits.map((credit) => `
-            <div class="extra-row">
-              <div>${esc(credit.customer_alias)}<span class="cell-sub">${pct(credit.confidence, 0)} confidence</span></div>
-              <div class="extra-row__value">${money(credit.balance_mean)}<span class="cell-sub">± ${money(credit.balance_std_dev)}</span></div>
-            </div>`).join("")}
-        </div>`;
-    }
-
-    const recipes = $("#recipes-card");
-    if (!state.recipes.length) {
-      recipes.innerHTML = emptyState("No recipe burn rates loaded.");
-    } else {
-      recipes.innerHTML = `
-        <div class="card__head"><div><p class="eyebrow">Recipes</p><h3>Ingredient burn rates</h3></div><span class="muted">${state.recipes.length} lines</span></div>
-        <div class="extra-list">
-          ${state.recipes.map((recipe) => `
-            <div class="extra-row">
-              <div>${esc(recipe.dish_name)} · ${esc(recipe.ingredient_name)}<span class="cell-sub">${pct(recipe.confidence, 0)} confidence</span></div>
-              <div class="extra-row__value">${num(recipe.qty_per_plate_mean, 4)} ${esc(recipe.unit)}<span class="cell-sub">± ${num(recipe.qty_per_plate_std_dev, 4)} per plate</span></div>
-            </div>`).join("")}
-        </div>`;
-    }
-  }
-
-  function renderScenario() {
-    const container = $("#scenario-result");
-    if (!state.lastScenario) {
-      container.hidden = true;
-      container.innerHTML = "";
-      return;
-    }
-    container.hidden = false;
-    if (state.lastScenario.type === "noisy") {
-      const { tight, noisy } = state.lastScenario;
-      const tightStd = Number(tight.debit.amount_std_dev) || 0;
-      const noisyStd = Number(noisy.debit.amount_std_dev) || 0;
-      const ratio = tightStd > 0 ? noisyStd / tightStd : 0;
-      container.innerHTML = `
-        <h3>Live range comparison</h3>
-        <p>Same item and quantity; only the quoted-price disagreement differs.</p>
-        <div class="receipt-compare">
-          <div><span>Tight quotes</span><strong>${money(tight.debit.amount_mean)} ± ${money(tightStd)}</strong></div>
-          <div><span>Noisy quotes</span><strong>${money(noisy.debit.amount_mean)} ± ${money(noisyStd)}</strong></div>
-          <div><span>Range ratio</span><strong>${ratio.toFixed(2)}×</strong></div>
-        </div>
-        <div class="button-row">
-          <button class="btn btn--small btn--primary" type="button" data-explain="${esc(noisy.transaction_id)}">Open noisy Trust Receipt</button>
-        </div>
-      `;
-      return;
-    }
-    if (state.lastScenario.type === "pending") {
-      const entry = state.lastScenario.entry;
-      container.innerHTML = `
-        <h3>Pending pair fused</h3>
-        <p>Monte Carlo fused the pending audio and SMS events into a balanced entry.</p>
-        <div class="receipt-compare">
-          <div><span>Amount</span><strong>${money(entry.debit.amount_mean)} ± ${money(entry.debit.amount_std_dev)}</strong></div>
-          <div><span>Confidence</span><strong>${pct(entry.confidence, 0)}</strong></div>
-          <div><span>Status</span><strong>${esc(entry.status)}</strong></div>
-        </div>
-        <div class="button-row">
-          <button class="btn btn--small btn--primary" type="button" data-explain="${esc(entry.transaction_id)}">Open Trust Receipt</button>
-        </div>
-      `;
-    }
-  }
-
-  function renderApiLinks() {
-    const base = state.apiBase.replace(/\/+$/, "");
-    const docs = document.getElementById("docs-link");
-    const openapi = document.getElementById("openapi-link");
-    if (docs) docs.href = `${base}/docs`;
-    if (openapi) openapi.href = `${base}/openapi.json`;
-  }
-
   function renderReceipt(explanation) {
     const entry = findLedger(explanation.transaction_id);
+    const title = entry ? entryInfo(entry).title : "This record";
     const rangeMap = new Map(explanation.per_source_ranges.map((range) => [range.event_id, range]));
-    const sourceCards = explanation.sources.length
-      ? explanation.sources.map((source) => {
+    const sources = explanation.sources || [];
+    const evidenceEvents = (explanation.evidence_event_ids || []).map(findEvent).filter(Boolean);
+    const sourceCards = sources.length
+      ? sources.map((source) => {
           const range = rangeMap.get(source.event_id);
+          const event = findEvent(source.event_id);
+          const text = event?.raw_text ? truncate(event.raw_text, 120) : "";
+          const time = source.clock_suspect ? "" : timeLabel(source.wall_clock);
+          const facts = [
+            `${qtyLabel(source.qty)} ${esc(source.unit)} ${esc(source.item)}`,
+            source.price == null ? "price not read" : money(source.price),
+            time,
+          ].filter(Boolean).map((fact) => `<span>${fact}</span>`).join("");
+          const label = source.device_label || phoneName(source.device_id);
           return `
             <article class="source-card">
               <div class="source-card__top">
-                <span class="chip chip--${sourceClass(source.source)}">${esc(source.source)} · ${esc(source.device_id)}</span>
-                <span class="muted">${pct(source.confidence, 0)} confidence</span>
+                <span class="chip chip--${sourceClass(source.source)}">${esc(sourceName(source.source))} · ${esc(label)}</span>
+                <span class="muted">${pct(source.confidence, 0)} sure</span>
               </div>
-              <div class="source-card__meta">
-                <div><span>Item</span><strong>${esc(source.item)}</strong></div>
-                <div><span>Quantity</span><strong>${num(source.qty, 2)} ${esc(source.unit)}</strong></div>
-                <div><span>Extended price</span><strong>${source.price == null ? "missing → default" : money(source.price)}</strong></div>
-                <div><span>Unit price</span><strong>${money(source.unit_price)}</strong></div>
-                <div><span>Logical clock</span><strong>${esc(source.logical_clock)}</strong></div>
-                <div><span>Wall clock</span><strong>${esc(fmtDate(source.wall_clock))}</strong></div>
-              </div>
-              <div class="badge-stack" style="margin-top:.55rem">
-                ${source.clock_suspect ? '<span class="tag tag--red">suspect wall clock</span>' : '<span class="tag tag--green">trusted clock</span>'}
-                ${range ? `<span class="tag tag--quiet">single-source ${money(range.amount_mean)} ± ${money(range.amount_std_dev)}</span>` : ""}
-              </div>
+              ${text ? `<p class="source-note">“${esc(text)}”</p>` : ""}
+              <div class="source-media" data-media="${esc(source.event_id)}" hidden></div>
+              <div class="source-facts">${facts}</div>
+              ${range ? `<div class="source-facts"><span>On its own: ${money(range.amount_mean)}</span></div>` : ""}
+              ${source.clock_suspect ? '<span class="tag tag--red" style="margin-top:8px">Wrong date on this note</span>' : ""}
             </article>`;
         }).join("")
-      : emptyState("No priced entity was found for this entry.");
+      : evidenceEvents.length
+        ? evidenceEvents.map((event) => `
+            <article class="source-card">
+              <div class="source-card__top">
+                <span class="chip chip--${sourceClass(event.source)}">${esc(sourceName(event.source))} · ${esc(event.device_label || phoneName(event.device_id))}</span>
+                <span class="muted">${isSuspectWallClock(event.wall_clock) ? "" : esc(timeLabel(event.wall_clock))}</span>
+              </div>
+              ${event.raw_text ? `<p class="source-note">“${esc(truncate(event.raw_text, 120))}”</p>` : ""}
+              <div class="source-media" data-media="${esc(event.event_id)}" hidden></div>
+              <div class="source-facts"><span>The amount was written in this note.</span></div>
+              ${isSuspectWallClock(event.wall_clock) ? '<span class="tag tag--red" style="margin-top:8px">Wrong date on this note</span>' : ""}
+            </article>`).join("")
+        : emptyState("No note could be read for this record.");
 
-    const ranges = explanation.per_source_ranges.map((range) => {
-      const source = explanation.sources.find((item) => item.event_id === range.event_id);
-      return { ...range, source };
-    });
+    const ranges = explanation.per_source_ranges.map((range) => ({
+      ...range,
+      source: sources.find((item) => item.event_id === range.event_id),
+    }));
     const maxRangeMean = Math.max(1, ...ranges.map((range) => Number(range.amount_mean) || 0), Number(explanation.simulated_amount_mean) || 0);
     const counterfactuals = ranges.map((range) => `
       <div class="counterfactual">
-        <span>${esc(range.source?.source || "source")} · ${esc(shortDevice(range.source?.device_id || ""))}</span>
+        <span>${esc(sourceName(range.source?.source))} only</span>
         <div class="counterfactual__track" aria-hidden="true"><span class="counterfactual__fill" style="width:${Math.max(2, (Number(range.amount_mean) / maxRangeMean) * 100)}%"></span></div>
-        <span class="counterfactual__value">${money(range.amount_mean)} ± ${money(range.amount_std_dev)}</span>
+        <span class="counterfactual__value">${money(range.amount_mean)}</span>
       </div>`).join("");
-    const fusedCounterfactual = `
-      <div class="counterfactual">
-        <span><strong>Fused</strong></span>
-        <div class="counterfactual__track" aria-hidden="true"><span class="counterfactual__fill" style="width:${Math.max(2, (Number(explanation.simulated_amount_mean) / maxRangeMean) * 100)}%"></span></div>
-        <span class="counterfactual__value">${money(explanation.simulated_amount_mean)} ± ${money(explanation.simulated_amount_std_dev)}</span>
-      </div>`;
+    const fusedRow = ranges.length > 1
+      ? `<div class="counterfactual">
+          <span><strong>Both notes</strong></span>
+          <div class="counterfactual__track" aria-hidden="true"><span class="counterfactual__fill" style="width:${Math.max(2, (Number(explanation.simulated_amount_mean) / maxRangeMean) * 100)}%"></span></div>
+          <span class="counterfactual__value">${money(explanation.simulated_amount_mean)}</span>
+        </div>`
+      : "";
 
     const agreement = explanation.agreement;
-    $("#receipt-title").textContent = entry
-      ? `${entry.debit.account} → ${entry.credit.account}`
-      : "Evidence explanation";
+    const agreeText = agreement.verdict === "agree"
+      ? "Yes. The notes say the same amount."
+      : agreement.verdict === "disagree"
+        ? `No. The prices are ${pctPoints(agreement.price_spread_pct, 0)} apart.`
+        : "Only one note, so there is nothing to compare.";
+    const whyText = sources.length === 0
+      ? "The amount was written directly in one note. There is no second note to compare."
+      : agreement.verdict === "agree"
+        ? "Two separate notes give the same amount, so the number is strong."
+        : agreement.verdict === "disagree"
+          ? "The notes disagree, so the number is less certain and the range is wider."
+          : "Only one note mentions this, so the number is less certain.";
+    const wrongDate = sources.some((source) => source.clock_suspect)
+      || evidenceEvents.some((event) => isSuspectWallClock(event.wall_clock));
+    const spread = Number(explanation.amount_std_dev) || 0;
+
+    $("#receipt-title").textContent = `Why ${money(explanation.amount_mean)}?`;
     $("#receipt-body").innerHTML = `
       <div class="receipt-hero">
         <div>
-          <p class="eyebrow">Stored entry ${esc(explanation.status)}</p>
+          <p class="eyebrow">${esc(title)}</p>
           <div class="receipt-amount" data-count="${Number(explanation.amount_mean)}" data-count-format="money" data-count-key="receipt">${money(explanation.amount_mean)}</div>
-          <p class="receipt-sub">± ${money(explanation.amount_std_dev)} · confidence ${pct(explanation.confidence, 0)}</p>
+          <p class="receipt-sub">${spread > 0 ? `Give or take ${money(spread)} · ` : ""}${pct(explanation.confidence, 0)} sure</p>
         </div>
         <div class="badge-stack">
-          ${explanation.canonical_fallback ? '<span class="tag tag--amber">pinned demo seed</span>' : '<span class="tag tag--green">live simulation</span>'}
-          ${explanation.sources.some((source) => source.clock_suspect) ? '<span class="tag tag--red">suspect clock</span>' : ""}
-          <span class="tag">${explanation.sources.length} source${explanation.sources.length === 1 ? "" : "s"}</span>
+          ${statusTag(explanation.status)}
+          ${wrongDate ? '<span class="tag tag--red">Wrong date</span>' : ""}
         </div>
       </div>
 
-      <div class="receipt-compare">
-        <div><span>Stored value</span><strong>${money(explanation.amount_mean)} ± ${money(explanation.amount_std_dev)}</strong></div>
-        <div><span>Live Monte Carlo</span><strong>${money(explanation.simulated_amount_mean)} ± ${money(explanation.simulated_amount_std_dev)}</strong></div>
-        <div><span>Confidence</span><strong>${pct(explanation.confidence, 0)} / ${pct(explanation.simulated_confidence, 0)}</strong></div>
-      </div>
-
-      ${explanation.canonical_fallback ? '<div class="receipt-callout">This is the canonical demo seed, pinned for rehearsal. The live Monte Carlo above is what the same evidence actually produces.</div>' : ""}
-
       <section class="receipt-section">
-        <h3>Evidence</h3>
+        <h3>What we used</h3>
         <div class="source-grid">${sourceCards}</div>
       </section>
 
       <section class="receipt-section">
-        <h3>Agreement</h3>
-        <div class="agreement-grid">
-          <div><span>Verdict</span><strong>${verdictTag(agreement.verdict)}</strong></div>
-          <div><span>Price spread</span><strong>${pctPoints(agreement.price_spread_pct, 1)}</strong></div>
-          <div><span>Range multiplier</span><strong>${num(agreement.std_multiplier, 2)}×</strong></div>
-          <div><span>Confidence delta</span><strong>${confidenceDelta(agreement.confidence_adjustment)}</strong></div>
-        </div>
-        <p class="muted" style="margin:.55rem 0 0">Mean source confidence ${pct(agreement.mean_source_confidence, 1)}. Method: ${esc(agreement.method)}.</p>
+        <h3>Do the notes agree?</h3>
+        <p class="result-line">${agreeText}</p>
       </section>
 
       ${ranges.length ? `
       <section class="receipt-section">
-        <h3>Counterfactual ranges</h3>
-        <div class="counterfactual-grid">
-          ${counterfactuals}
-          ${ranges.length > 1 ? fusedCounterfactual : ""}
-        </div>
+        <h3>If we had only one note</h3>
+        <div class="counterfactual-grid">${counterfactuals}${fusedRow}</div>
       </section>` : ""}
 
       <section class="receipt-section">
-        <h3>Why</h3>
-        <p class="narrative">${esc(explanation.narrative)}</p>
+        <h3>What this means</h3>
+        <p class="result-line">${whyText}${wrongDate ? " The bill photo had a wrong date, but we still used the amount." : ""}</p>
       </section>
 
-      ${(explanation.evidence_event_ids || []).length ? `
-      <section class="receipt-section">
-        <h3>Evidence IDs</h3>
-        <div class="evidence-id-list">
-          ${(explanation.evidence_event_ids || []).map((id) => `<span class="evidence-id">${esc(id)}</span>`).join("")}
+      <details class="fold fold--inner">
+        <summary>More detail</summary>
+        <div class="fold__body">
+          <div class="receipt-compare">
+            <div><span>Amount</span><strong>${money(explanation.amount_mean)}</strong></div>
+            <div><span>How sure</span><strong>${pct(explanation.confidence, 0)}</strong></div>
+            <div><span>Notes</span><strong>${sources.length || evidenceEvents.length}</strong></div>
+          </div>
+          ${explanation.canonical_fallback ? '<p class="faint">This is the fixed example bill used for the demo.</p>' : ""}
+          ${(explanation.evidence_event_ids || []).length ? `
+            <div class="evidence-id-list">
+              ${(explanation.evidence_event_ids || []).map((id) => `<span class="evidence-id">${esc(id)}</span>`).join("")}
+            </div>` : ""}
         </div>
-      </section>` : ""}
+      </details>
     `;
   }
 
   async function openReceipt(transactionId, button) {
     setButtonBusy(button, true);
     try {
-      const explanation = await api(`/ledger/${encodeURIComponent(transactionId)}/explain`);
+      const explanation = await IWLocal.explain(transactionId);
       renderReceipt(explanation);
       openSheet("#receipt-sheet");
       countUp(document.querySelector("#receipt-body") || document);
+      hydrateMedia();
     } catch (error) {
-      toast(error.message || "Could not load the Trust Receipt.", "error");
+      console.error(error);
+      toast("Could not open this note. Try again.", "error");
     } finally {
       setButtonBusy(button, false);
     }
   }
 
+  async function hydrateMedia() {
+    const holders = document.querySelectorAll("#receipt-body [data-media]");
+    for (const holder of holders) {
+      if (holder.dataset.loaded) continue;
+      const blob = await IWLocal.getMedia(holder.dataset.media);
+      if (!blob) continue;
+      const url = URL.createObjectURL(blob);
+      if (String(blob.type).startsWith("image/")) {
+        const image = document.createElement("img");
+        image.src = url;
+        image.alt = "Photo attached to this note";
+        holder.appendChild(image);
+      } else if (String(blob.type).startsWith("audio/")) {
+        const audio = document.createElement("audio");
+        audio.controls = true;
+        audio.src = url;
+        audio.className = "source-audio";
+        holder.appendChild(audio);
+      } else {
+        continue;
+      }
+      holder.hidden = false;
+      holder.dataset.loaded = "1";
+    }
+  }
+
   /* ---------- Scenario runners ---------- */
 
-  async function runMoneyShot(button) {
-    await runAction(button, async () => {
-      const entry = await api("/fuse", { method: "POST", body: { event_ids: [SEED.audio, SEED.ocr] } });
-      await refreshAll({ quiet: true });
-      toast(`Canonical fusion: ${money(entry.debit.amount_mean)} ± ${money(entry.debit.amount_std_dev)}.`);
-      await openReceipt(entry.transaction_id);
-    });
+  /* ---------- Add a note ---------- */
+
+  function resetAddDraft() {
+    const add = state.add;
+    if (add.timer) window.clearInterval(add.timer);
+    if (add.recorder && add.recorder.state !== "inactive") {
+      try { add.recorder.stop(); } catch { /* already stopped */ }
+    }
+    if (add.stream) add.stream.getTracks().forEach((track) => track.stop());
+    if (add.mediaUrl) URL.revokeObjectURL(add.mediaUrl);
+    state.add = {
+      kind: "typed",
+      direction: "out",
+      mediaBlob: null,
+      mediaUrl: null,
+      recording: false,
+      recorder: null,
+      stream: null,
+      chunks: [],
+      timer: null,
+      seconds: 0,
+    };
+    $("#capture-row").hidden = false;
+    $("#add-draft").hidden = true;
+    $("#add-draft").innerHTML = "";
+    $("#add-form").hidden = true;
+    $("#add-form").reset();
+    $$(".seg__btn").forEach((button) => button.classList.toggle("is-active", button.dataset.direction === "out"));
+    $("#photo-input").value = "";
   }
 
-  async function runNoisyScenario(button) {
-    await runAction(button, async () => {
-      await api("/demo/reset", { method: "POST" });
-      state.lastMerge = null;
-      state.lastClock = null;
-      state.lastScenario = null;
-
-      const createEvent = (price, label) => api("/events", {
-        method: "POST",
-        body: {
-          source: "manual",
-          raw_text: `Synthetic ${label} supplier quote`,
-          device_id: label.endsWith("A") ? "device-a" : "device-b",
-          extracted_entities: [{ item: "onion", qty: 2, unit: "kg", price }],
-        },
-      });
-
-      const tightA = await createEvent(100, "tight A");
-      const tightB = await createEvent(100, "tight B");
-      const noisyA = await createEvent(100, "noisy A");
-      const noisyB = await createEvent(140, "noisy B");
-      const tight = await api("/fuse", { method: "POST", body: { event_ids: [tightA.event_id, tightB.event_id] } });
-      const noisy = await api("/fuse", { method: "POST", body: { event_ids: [noisyA.event_id, noisyB.event_id] } });
-
-      state.lastScenario = { type: "noisy", tight, noisy };
-      await refreshAll({ quiet: true });
-      switchTab("more");
-      const ratio = Number(tight.debit.amount_std_dev) > 0
-        ? (Number(noisy.debit.amount_std_dev) / Number(tight.debit.amount_std_dev)).toFixed(2)
-        : "—";
-      toast(`Noisy quotes: ${money(noisy.debit.amount_std_dev)} vs ${money(tight.debit.amount_std_dev)} (${ratio}×).`);
-    });
+  function openAddSheet() {
+    resetAddDraft();
+    openSheet("#add-sheet");
   }
 
-  async function runPendingPair(button) {
-    await runAction(button, async () => {
-      await api("/demo/reset", { method: "POST" });
-      state.lastMerge = null;
-      state.lastClock = null;
-      const entry = await api("/fuse", { method: "POST", body: { event_ids: [SEED.pendingAudio, SEED.pendingSms] } });
-      state.lastScenario = { type: "pending", entry };
-      await refreshAll({ quiet: true });
-      switchTab("more");
-      toast(`Pending pair fused: ${money(entry.debit.amount_mean)} ± ${money(entry.debit.amount_std_dev)}.`);
-    });
+  function closeAddSheet() {
+    resetAddDraft();
+    closeSheet("#add-sheet");
+  }
+
+  function showAddForm(kind) {
+    state.add.kind = kind;
+    $("#add-form").hidden = false;
+    window.setTimeout(() => $("#add-item").focus(), 260);
+  }
+
+  function renderDraft() {
+    const draft = $("#add-draft");
+    const add = state.add;
+    if (add.recording) {
+      $("#capture-row").hidden = true;
+      draft.hidden = false;
+      draft.innerHTML = `
+        <div class="recording"><span class="recording__dot"></span>Recording… <span id="rec-time">0:00</span></div>
+        <div class="draft__actions"><button class="btn btn--danger-outline" type="button" id="stop-rec">Stop</button></div>`;
+      return;
+    }
+    if (!add.mediaBlob) {
+      draft.hidden = true;
+      draft.innerHTML = "";
+      return;
+    }
+    const isImage = String(add.mediaBlob.type).startsWith("image/");
+    $("#capture-row").hidden = true;
+    draft.hidden = false;
+    draft.innerHTML = `
+      <div class="draft__row">
+        <span class="draft__label">${isImage ? "Photo attached" : "Voice note ready"}</span>
+        <button class="btn btn--small btn--ghost" type="button" id="redo-media">Change</button>
+      </div>
+      ${isImage ? `<img src="${add.mediaUrl}" alt="The photo you took">` : `<audio controls src="${add.mediaUrl}"></audio>`}
+    `;
+  }
+
+  function clearMediaDraft() {
+    const add = state.add;
+    if (add.mediaUrl) URL.revokeObjectURL(add.mediaUrl);
+    add.mediaBlob = null;
+    add.mediaUrl = null;
+    add.kind = "typed";
+    $("#capture-row").hidden = false;
+    $("#add-draft").hidden = true;
+    $("#add-draft").innerHTML = "";
+    $("#photo-input").value = "";
+  }
+
+  async function shrinkImage(file) {
+    if (!String(file.type).startsWith("image/")) return file;
+    try {
+      const bitmap = await createImageBitmap(file);
+      const scale = Math.min(1, 1400 / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.82));
+      return blob || file;
+    } catch {
+      return file;
+    }
+  }
+
+  async function onPhotoPicked(event) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    const blob = await shrinkImage(file);
+    if (state.add.mediaUrl) URL.revokeObjectURL(state.add.mediaUrl);
+    state.add.mediaBlob = blob;
+    state.add.mediaUrl = URL.createObjectURL(blob);
+    renderDraft();
+    showAddForm("photo");
+  }
+
+  async function startVoice() {
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      toast("Voice is not available here. Type it instead.", "error");
+      showAddForm("typed");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const add = state.add;
+      add.kind = "voice";
+      add.stream = stream;
+      add.recorder = recorder;
+      add.chunks = [];
+      add.seconds = 0;
+      add.recording = true;
+      recorder.ondataavailable = (eventData) => {
+        if (eventData.data.size) add.chunks.push(eventData.data);
+      };
+      recorder.onstop = () => {
+        if (state.add !== add) return;
+        add.recording = false;
+        if (add.timer) window.clearInterval(add.timer);
+        stream.getTracks().forEach((track) => track.stop());
+        add.mediaBlob = new Blob(add.chunks, { type: recorder.mimeType || "audio/webm" });
+        add.mediaUrl = URL.createObjectURL(add.mediaBlob);
+        renderDraft();
+        showAddForm("voice");
+      };
+      recorder.start();
+      renderDraft();
+      add.timer = window.setInterval(() => {
+        add.seconds += 1;
+        const label = $("#rec-time");
+        if (label) label.textContent = `${Math.floor(add.seconds / 60)}:${String(add.seconds % 60).padStart(2, "0")}`;
+        if (add.seconds >= 45 && recorder.state === "recording") recorder.stop();
+      }, 1000);
+    } catch {
+      toast("Mic not allowed. Type it instead.", "error");
+      showAddForm("typed");
+    }
+  }
+
+  function stopVoice() {
+    if (state.add.recorder?.state === "recording") state.add.recorder.stop();
+  }
+
+  async function onAddSubmit(event) {
+    event.preventDefault();
+    const item = $("#add-item").value.trim();
+    const qty = Number($("#add-qty").value);
+    const amount = Number($("#add-amount").value);
+    const unit = $("#add-unit").value;
+    const text = $("#add-text").value.trim();
+    if (!item || !(qty > 0) || !(amount > 0)) {
+      toast("Add the item, quantity and amount.", "error");
+      return;
+    }
+    const button = event.submitter || $("#add-form button[type=submit]");
+    setButtonBusy(button, true);
+    try {
+      const result = await IWLocal.addNote({
+        kind: state.add.kind,
+        direction: state.add.direction,
+        item,
+        qty,
+        unit,
+        amount,
+        text,
+      }, state.add.mediaBlob);
+      closeAddSheet();
+      switchTab("today");
+      await refreshLocal();
+      if (result.count > 1) {
+        toast(result.agree
+          ? `${result.count} notes agree on ${money(result.amount)}.`
+          : "The notes differ, so the range is wider.");
+      } else {
+        toast(`Saved: ${money(amount)}.`);
+      }
+    } catch (error) {
+      console.error(error);
+      toast("Could not save the note.", "error");
+    } finally {
+      setButtonBusy(button, false);
+    }
+  }
+
+  function openStockSheet() {
+    $("#stock-form").reset();
+    $("#stock-item").value = "tomatoes";
+    openSheet("#stock-sheet");
+    window.setTimeout(() => $("#stock-qty").focus(), 260);
+  }
+
+  async function onStockSubmit(event) {
+    event.preventDefault();
+    const item = $("#stock-item").value.trim();
+    const counted = Number($("#stock-qty").value);
+    if (!item || !(counted >= 0)) {
+      toast("Add the item and how much is left.", "error");
+      return;
+    }
+    const button = event.submitter || $("#stock-form button[type=submit]");
+    setButtonBusy(button, true);
+    try {
+      const stock = await IWLocal.countStock({ item, countedQty: counted });
+      closeSheet("#stock-sheet");
+      switchTab("today");
+      await refreshLocal();
+      toast(stock.missingQty > 0
+        ? `${num(stock.missingQty, 1)} kg short, about ${money(stock.missingValue)}.`
+        : "Your stock matches what you bought.");
+    } catch (error) {
+      console.error(error);
+      toast("Could not save the count.", "error");
+    } finally {
+      setButtonBusy(button, false);
+    }
   }
 
   async function runSync(button) {
     await runAction(button, async () => {
-      const result = await api("/sync", { method: "POST", body: {} });
-      state.lastMerge = result;
-      await refreshAll({ quiet: true });
-      switchTab("sync");
-      toast(`Sync complete: ${result.conflicts_resolved} conflicts resolved, 0 transactions lost.`);
-    });
-  }
-
-  async function runClock(button) {
-    await runAction(button, async () => {
-      const result = await api("/simulate-clock", { method: "POST", body: { device_id: "device-b" } });
-      state.lastClock = result;
-      await refreshAll({ quiet: true });
-      switchTab("sync");
-      toast(`1970 clock detected; entry placed at logical clock ${result.logical_clock_used}.`);
+      const info = await IWLocal.sync(state.apiBase);
+      await refreshLocal();
+      const parts = [];
+      if (info.pushed) parts.push(`${info.pushed} sent`);
+      if (info.pulled) parts.push(`${info.pulled} received`);
+      toast(parts.length ? `Synced: ${parts.join(", ")}.` : "Everything was already on this phone.");
     });
   }
 
   async function runReset(button) {
+    if (!window.confirm("Erase every note on this phone?")) return;
     await runAction(button, async () => {
-      await api("/demo/reset", { method: "POST" });
-      state.lastMerge = null;
-      state.lastClock = null;
-      state.lastScenario = null;
+      await IWLocal.reset();
       closeAllSheets();
-      await refreshAll({ quiet: true });
-      toast("Demo restored to the seed state.");
+      switchTab("today");
+      await refreshLocal();
+      toast("All notes erased.");
+    });
+  }
+
+  async function runExample(button) {
+    if (!window.confirm("Replace the notes on this phone with an example day?")) return;
+    await runAction(button, async () => {
+      await IWLocal.loadExample();
+      closeAllSheets();
+      switchTab("today");
+      await refreshLocal();
+      toast("Example day loaded.");
     });
   }
 
   const ACTIONS = {
-    "money-shot": runMoneyShot,
-    noisy: runNoisyScenario,
-    "pending-pair": runPendingPair,
+    "add-note": openAddSheet,
+    "open-stock": openStockSheet,
     sync: runSync,
-    clock: runClock,
     reset: runReset,
+    "load-example": runExample,
   };
 
   /* ---------- Events ---------- */
 
   function bindEvents() {
-    $("#refresh-btn").addEventListener("click", () => refreshAll());
-    $("#retry-btn").addEventListener("click", () => refreshAll());
-    $("#fab").addEventListener("click", () => openSheet("#actions-sheet"));
+    $("#refresh-btn").addEventListener("click", () => refreshLocal());
+    $("#retry-btn").addEventListener("click", () => refreshLocal());
+    $("#fab").addEventListener("click", openAddSheet);
 
     $$(".bottomnav__item").forEach((item) => {
       item.addEventListener("click", () => switchTab(item.dataset.tab));
@@ -1178,9 +1231,17 @@
       });
     });
 
-    $("#pending-toggle").addEventListener("change", (event) => {
-      state.pendingOnly = event.target.checked;
-      renderEvents();
+    $("#photo-btn").addEventListener("click", () => $("#photo-input").click());
+    $("#photo-input").addEventListener("change", onPhotoPicked);
+    $("#voice-btn").addEventListener("click", startVoice);
+    $("#type-btn").addEventListener("click", () => showAddForm("typed"));
+    $("#add-form").addEventListener("submit", onAddSubmit);
+    $("#stock-form").addEventListener("submit", onStockSubmit);
+    $$("#add-form .seg__btn").forEach((button) => {
+      button.addEventListener("click", () => {
+        state.add.direction = button.dataset.direction;
+        $$("#add-form .seg__btn").forEach((item) => item.classList.toggle("is-active", item === button));
+      });
     });
 
     $("#api-form").addEventListener("submit", (event) => {
@@ -1193,13 +1254,13 @@
         if (!["http:", "https:"].includes(url.protocol)) throw new Error("unsupported protocol");
         base = url.origin;
       } catch {
-        toast("Enter a valid http(s) API base.", "error");
+        toast("Enter a valid server address.", "error");
         return;
       }
       state.apiBase = base.replace(/\/+$/, "");
       window.localStorage.setItem("iw-api-base", state.apiBase);
       input.value = state.apiBase;
-      refreshAll();
+      toast("Server saved.");
     });
 
     const themeToggle = $("#theme-toggle");
@@ -1215,13 +1276,24 @@
         closeSheet("#receipt-sheet");
         return;
       }
-      if (event.target.closest("[data-close-sheet]")) {
-        closeSheet("#actions-sheet");
+      if (event.target.closest("[data-close-add]")) {
+        closeAddSheet();
+        return;
+      }
+      if (event.target.closest("[data-close-stock]")) {
+        closeSheet("#stock-sheet");
+        return;
+      }
+      if (event.target.closest("#stop-rec")) {
+        stopVoice();
+        return;
+      }
+      if (event.target.closest("#redo-media")) {
+        clearMediaDraft();
         return;
       }
       const action = event.target.closest("[data-action]");
       if (action) {
-        closeSheet("#actions-sheet");
         const runner = ACTIONS[action.dataset.action];
         if (runner) runner(action);
         return;
@@ -1248,11 +1320,10 @@
 
   function boot() {
     bindEvents();
-    renderSeedIds();
     $("#api-base").value = state.apiBase;
     switchTab("today");
     window.setTimeout(hideSplash, 2600);
-    refreshAll();
+    refreshLocal();
     registerServiceWorker();
   }
 

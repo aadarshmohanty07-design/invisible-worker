@@ -1,9 +1,10 @@
-const CACHE = "iw-shell-v1";
+const CACHE = "iw-shell-v3";
 const SHELL = [
   "./",
   "./index.html",
   "./styles.css",
   "./app.js",
+  "./local.js",
   "./manifest.webmanifest",
   "./icons/icon-512.png",
 ];

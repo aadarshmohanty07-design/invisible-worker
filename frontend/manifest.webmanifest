@@ -1,7 +1,7 @@
 {
   "name": "Invisible Worker",
   "short_name": "Invisible",
-  "description": "Offline-first probabilistic ledger for street vendors. Every number has a range and a receipt.",
+  "description": "A money book for street vendors that works offline and shows what you really made.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

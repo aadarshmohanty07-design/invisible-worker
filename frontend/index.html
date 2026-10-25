@@ -9,7 +9,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="description" content="Offline-first probabilistic ledger for street vendors. Every amount carries a confidence range and its source evidence.">
+  <meta name="description" content="A money book for street vendors that works offline and shows what you really made.">
   <title>Invisible Worker</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" type="image/png" href="icons/icon-512.png">
@@ -35,7 +35,7 @@
         </svg>
       </div>
       <p class="splash__name">Invisible Worker</p>
-      <p class="splash__tag">Offline-first probabilistic ledger</p>
+      <p class="splash__tag">Your daily money book</p>
       <span class="splash__loader" aria-hidden="true"></span>
     </div>
 
@@ -49,15 +49,15 @@
         </span>
         <div class="appbar__titles">
           <h1>Invisible Worker</h1>
-          <p id="appbar-sub">Today's numbers</p>
+          <p id="appbar-sub">Your money</p>
         </div>
       </div>
       <div class="appbar__actions">
         <span class="status status--idle" id="api-status" role="status">
           <span class="status__dot"></span>
-          <span id="api-status-text">Connecting</span>
+          <span id="api-status-text">Starting</span>
         </span>
-        <button class="iconbtn" id="refresh-btn" type="button" aria-label="Refresh">
+        <button class="iconbtn" id="refresh-btn" type="button" aria-label="Check again">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
         </button>
       </div>
@@ -65,23 +65,18 @@
 
     <main id="main">
       <div class="banner" id="error-banner" role="alert" hidden>
-        <div><strong>API unavailable.</strong> <span id="error-text">Check that the server is running and the API base is correct.</span></div>
-        <button class="btn btn--small btn--ghost" id="retry-btn" type="button">Retry</button>
+        <div id="error-text">Could not read the notes on this phone. Reload the app.</div>
+        <button class="btn btn--small btn--ghost" id="retry-btn" type="button">Try again</button>
       </div>
 
       <section class="page" id="page-today" data-page="today">
         <div class="date-row">
           <span class="pill pill--tonal" id="business-date">Loading day…</span>
-          <span class="pill pill--quiet" id="health-version">API —</span>
+          <span class="pill pill--quiet" id="day-note">—</span>
+          <span class="pill pill--quiet" id="seed-pill" hidden>Example day</span>
         </div>
 
         <article class="card card--hero" id="profit-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--big"></div>
-          <div class="skeleton skeleton--line"></div>
-        </article>
-
-        <article class="card" id="money-shot-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--big"></div>
           <div class="skeleton skeleton--line"></div>
@@ -93,152 +88,125 @@
           <div class="skeleton skeleton--line"></div>
         </article>
 
-        <article class="card" id="waterfall-card">
+        <article class="card" id="money-shot-card">
           <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </article>
-
-        <article class="card" id="loss-card">
-          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--big"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
 
-        <article class="card" id="evidence-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </article>
+        <details class="fold" id="numbers-fold">
+          <summary>See all the numbers</summary>
+          <div class="fold__body">
+            <article class="card" id="waterfall-card">
+              <div class="skeleton skeleton--line"></div>
+              <div class="skeleton skeleton--line"></div>
+              <div class="skeleton skeleton--line"></div>
+            </article>
+            <article class="card" id="loss-card">
+              <div class="skeleton skeleton--line"></div>
+              <div class="skeleton skeleton--line"></div>
+            </article>
+            <article class="card" id="evidence-card">
+              <div class="skeleton skeleton--line"></div>
+              <div class="skeleton skeleton--line"></div>
+            </article>
+          </div>
+        </details>
       </section>
 
       <section class="page" id="page-ledger" data-page="ledger" hidden>
-        <div class="chip-row" id="ledger-filters" role="tablist" aria-label="Ledger filters">
+        <div class="chip-row" id="ledger-filters" role="tablist" aria-label="Show">
           <button class="chip is-active" type="button" data-filter="all">All</button>
-          <button class="chip" type="button" data-filter="fused">Fused</button>
-          <button class="chip" type="button" data-filter="pending">Pending</button>
-          <button class="chip" type="button" data-filter="suspect">1970 clock</button>
+          <button class="chip" type="button" data-filter="in">Money in</button>
+          <button class="chip" type="button" data-filter="out">Money out</button>
+          <button class="chip" type="button" data-filter="pending">To check</button>
         </div>
         <div class="entry-list" id="ledger-list"></div>
       </section>
 
       <section class="page" id="page-sync" data-page="sync" hidden>
-        <p class="page-hint" id="sync-hint">Reset before Sync to replay the seeded three-conflict merge.</p>
-        <div class="device-grid" id="device-grid">
-          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-        </div>
+        <p class="page-hint" id="sync-hint">Everything is saved on this phone. Sync when the shop server is reachable.</p>
+        <div class="device-grid" id="device-grid"></div>
         <div class="button-row">
-          <button class="btn btn--primary" type="button" data-action="sync">Sync devices</button>
-          <button class="btn btn--danger-outline" type="button" data-action="clock">Simulate 1970 clock</button>
+          <button class="btn btn--primary" type="button" data-action="sync">Sync with shop</button>
         </div>
         <article class="card" id="merge-log-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
+          <div class="card__head"><div><h3>Sync</h3></div></div>
+          <p class="log__empty">Tap “Sync with shop” to look for notes from another phone.</p>
         </article>
-        <article class="card" id="clock-result-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </article>
-        <article class="card order-card" id="order-card">
-          <div class="card__head">
-            <h3>Logical order proof</h3>
-            <span class="muted">GET /ledger</span>
+        <details class="fold">
+          <summary>See the order of notes</summary>
+          <div class="fold__body">
+            <article class="card order-card" id="order-card">
+              <div class="order-pills" id="ledger-order"></div>
+              <p class="proof" id="probe-proof"></p>
+            </article>
           </div>
-          <div class="order-pills" id="ledger-order"></div>
-          <p class="proof" id="probe-proof">Loading ledger order…</p>
-        </article>
+        </details>
       </section>
 
       <section class="page" id="page-more" data-page="more" hidden>
-        <article class="card card--scenarios">
-          <div class="card__head">
-            <div><h3>Demo scenarios</h3></div>
+        <article class="card">
+          <div class="card__head"><div><h3>Stock</h3></div></div>
+          <p class="result-line">Count what is left. We compare it with what you bought.</p>
+          <div class="button-row">
+            <button class="btn btn--primary" type="button" data-action="open-stock">Count stock</button>
           </div>
-          <div class="scenario-list">
-            <button class="scenario" type="button" data-action="money-shot">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">Money shot</span><span class="scenario__copy">Fuse the seeded audio + OCR pair and open its Trust Receipt.</span></span>
-            </button>
-            <button class="scenario" type="button" data-action="noisy">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">Noisy quotes</span><span class="scenario__copy">Show the range widening when suppliers disagree.</span></span>
-            </button>
-            <button class="scenario" type="button" data-action="pending-pair">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">Pending pair</span><span class="scenario__copy">Fuse two pending events with the Monte Carlo path.</span></span>
-            </button>
-            <button class="scenario" type="button" data-action="sync">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">Sync phones</span><span class="scenario__copy">Merge three devices and derive the conflict log.</span></span>
-            </button>
-            <button class="scenario" type="button" data-action="clock">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">1970 clock</span><span class="scenario__copy">Append a hostile-clock probe and prove history survives.</span></span>
-            </button>
-            <button class="scenario scenario--danger" type="button" data-action="reset">
-              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
-              <span class="scenario__text"><span class="scenario__title">Reset demo</span><span class="scenario__copy">Restore the seed ledger and re-arm the CRDT replicas.</span></span>
-            </button>
-          </div>
-          <div class="scenario-result" id="scenario-result" hidden aria-live="polite"></div>
-        </article>
-
-        <article class="card" id="credits-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
-        </article>
-
-        <article class="card" id="recipes-card">
-          <div class="skeleton skeleton--line"></div>
-          <div class="skeleton skeleton--line"></div>
         </article>
 
         <article class="card">
-          <div class="card__head">
-            <div><h3>Raw events</h3></div>
-            <label class="switch">
-              <input type="checkbox" id="pending-toggle">
-              <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
-              <span class="switch__label">Pending only</span>
-            </label>
+          <div class="card__head"><div><h3>This phone</h3></div></div>
+          <p class="result-line" id="device-line">Notes are saved here, even without internet.</p>
+          <div class="button-row">
+            <button class="btn btn--danger-outline" type="button" data-action="reset">Start over</button>
           </div>
-          <div class="event-list" id="events-body"></div>
         </article>
 
-        <article class="card" id="seed-card">
-          <div class="card__head">
-            <h3>Demo IDs</h3>
-            <span class="muted">Stable seed identifiers</span>
-          </div>
-          <div class="seed-list" id="seed-list"></div>
-        </article>
-
-        <article class="card api-card">
-          <div class="card__head">
-            <div><h3>API connection</h3></div>
-            <span class="muted">Works over LAN, no cloud</span>
-          </div>
-          <form class="api-form" id="api-form">
-            <label for="api-base">API base</label>
-            <input id="api-base" name="api" type="url" placeholder="http://192.168.1.100:8000" autocomplete="off" spellcheck="false">
-            <button class="btn btn--primary" type="submit">Connect</button>
-          </form>
-          <div class="setting-row">
-            <span class="setting-row__text"><strong>Dark theme</strong><span>Follows system until you change it</span></span>
+        <article class="card">
+          <div class="card__head"><div><h3>Screen</h3></div></div>
+          <div class="setting-row" style="border-top:0;margin-top:0;padding-top:0">
+            <span class="setting-row__text"><strong>Dark screen</strong><span>Easier to read at night</span></span>
             <label class="switch">
-              <input type="checkbox" id="theme-toggle" role="switch" aria-label="Dark theme">
+              <input type="checkbox" id="theme-toggle" role="switch" aria-label="Dark screen">
               <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
             </label>
           </div>
-          <p class="muted">Response contracts live in <code>schemas.json</code>. Open <a id="docs-link" href="/docs">/docs</a> for Swagger or <a id="openapi-link" href="/openapi.json">/openapi.json</a> for endpoint paths.</p>
         </article>
 
-        <p class="colophon">Invisible Worker · CASCADE '26 · Theme 1 · Problem 2<br>Probabilistic ledger, CRDT sync, hostile-clock defence.</p>
+        <details class="fold">
+          <summary>Advanced</summary>
+          <div class="fold__body">
+            <article class="card api-card">
+              <div class="card__head"><div><h3>Shop server</h3></div></div>
+              <form class="api-form" id="api-form">
+                <label for="api-base">Server address</label>
+                <input id="api-base" name="api" type="url" placeholder="http://192.168.1.100:8000" autocomplete="off" spellcheck="false">
+                <button class="btn btn--primary" type="submit">Save</button>
+              </form>
+              <p class="muted">Only used for sync. The money book works without it.</p>
+            </article>
+
+            <article class="card">
+              <div class="card__head"><div><h3>Notes on this phone</h3></div></div>
+              <div class="event-list" id="events-body"></div>
+            </article>
+
+            <article class="card">
+              <div class="card__head"><div><h3>Example</h3></div></div>
+              <div class="button-row">
+                <button class="btn btn--outline" type="button" data-action="load-example">Load example day</button>
+              </div>
+              <p class="muted">Adds a full sample day so you can show how the numbers are built.</p>
+            </article>
+          </div>
+        </details>
+
+        <p class="colophon">Invisible Worker · CASCADE '26 · Theme 1 · Problem 2</p>
       </section>
     </main>
 
-    <button class="fab" id="fab" type="button" aria-label="Quick actions" aria-haspopup="dialog">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    <button class="fab" id="fab" type="button" aria-label="Add a note" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" focusable="false"><path d="M12 5v14"/><path d="M5 12h14"/></svg>
     </button>
 
     <nav class="bottomnav" aria-label="Main">
@@ -248,11 +216,11 @@
       </button>
       <button class="bottomnav__item" type="button" data-tab="ledger">
         <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
-        <span class="bottomnav__label">Ledger</span>
+        <span class="bottomnav__label">Records</span>
       </button>
       <button class="bottomnav__item" type="button" data-tab="sync">
         <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
-        <span class="bottomnav__label">Sync</span>
+        <span class="bottomnav__label">Phones</span>
       </button>
       <button class="bottomnav__item" type="button" data-tab="more">
         <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span>
@@ -266,8 +234,8 @@
         <div class="sheet__grab" data-close-modal aria-hidden="true"><span></span></div>
         <div class="sheet__head">
           <div>
-            <p class="eyebrow">Trust Receipt</p>
-            <h2 id="receipt-title">Evidence explanation</h2>
+            <p class="eyebrow">How we checked</p>
+            <h2 id="receipt-title">Why this number?</h2>
           </div>
           <button class="iconbtn" type="button" data-close-modal aria-label="Close receipt">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
@@ -277,45 +245,112 @@
       </div>
     </div>
 
-    <div class="sheet" id="actions-sheet" hidden>
-      <div class="sheet__backdrop" data-close-sheet></div>
-      <div class="sheet__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
-        <div class="sheet__grab" data-close-sheet aria-hidden="true"><span></span></div>
+    <div class="sheet" id="add-sheet" hidden>
+      <div class="sheet__backdrop" data-close-add></div>
+      <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="add-title">
+        <div class="sheet__grab" data-close-add aria-hidden="true"><span></span></div>
         <div class="sheet__head">
           <div>
-            <h2>Run the demo</h2>
+            <p class="eyebrow">New note</p>
+            <h2 id="add-title">Add today's money</h2>
           </div>
-          <button class="iconbtn" type="button" data-close-sheet aria-label="Close quick actions">
+          <button class="iconbtn" type="button" data-close-add aria-label="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
         <div class="sheet__body">
-          <div class="qa-grid">
-            <button class="qa" type="button" data-action="money-shot">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
-              <span>Money shot</span>
+          <div class="capture-row" id="capture-row">
+            <button class="capture" type="button" id="photo-btn">
+              <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg></span>
+              <span>Photo</span>
             </button>
-            <button class="qa" type="button" data-action="noisy">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
-              <span>Noisy quotes</span>
+            <button class="capture" type="button" id="voice-btn">
+              <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg></span>
+              <span>Voice</span>
             </button>
-            <button class="qa" type="button" data-action="pending-pair">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg></span>
-              <span>Pending pair</span>
-            </button>
-            <button class="qa" type="button" data-action="sync">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
-              <span>Sync phones</span>
-            </button>
-            <button class="qa" type="button" data-action="clock">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span>
-              <span>1970 clock</span>
-            </button>
-            <button class="qa qa--danger" type="button" data-action="reset">
-              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
-              <span>Reset demo</span>
+            <button class="capture" type="button" id="type-btn">
+              <span class="capture__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.85 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/></svg></span>
+              <span>Type</span>
             </button>
           </div>
+
+          <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
+          <div class="draft" id="add-draft" hidden></div>
+
+          <form class="add-form" id="add-form" hidden>
+            <div class="seg" role="group" aria-label="Money in or out">
+              <button class="seg__btn is-active" type="button" data-direction="out">I spent</button>
+              <button class="seg__btn" type="button" data-direction="in">I got</button>
+            </div>
+            <label class="field">
+              <span>What was it?</span>
+              <input id="add-item" list="item-list" placeholder="Tomatoes" autocomplete="off" required>
+            </label>
+            <datalist id="item-list">
+              <option value="tomatoes"></option>
+              <option value="onion"></option>
+              <option value="poha"></option>
+              <option value="tea"></option>
+              <option value="snacks"></option>
+              <option value="oil"></option>
+            </datalist>
+            <div class="field-pair">
+              <label class="field">
+                <span>How much</span>
+                <input id="add-qty" type="number" inputmode="decimal" step="any" min="0" placeholder="3" required>
+              </label>
+              <label class="field">
+                <span>Unit</span>
+                <select id="add-unit">
+                  <option value="kg">kg</option>
+                  <option value="plate">plate</option>
+                  <option value="piece">piece</option>
+                  <option value="cup">cup</option>
+                  <option value="litre">litre</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">
+              <span>Amount ₹</span>
+              <input id="add-amount" type="number" inputmode="decimal" step="any" min="1" placeholder="180" required>
+            </label>
+            <label class="field">
+              <span>Note (optional)</span>
+              <input id="add-text" placeholder="What was said or written" autocomplete="off">
+            </label>
+            <button class="btn btn--primary btn--wide" type="submit">Save note</button>
+            <p class="add-hint">Saved on this phone. No internet needed.</p>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="sheet" id="stock-sheet" hidden>
+      <div class="sheet__backdrop" data-close-stock></div>
+      <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="stock-title">
+        <div class="sheet__grab" data-close-stock aria-hidden="true"><span></span></div>
+        <div class="sheet__head">
+          <div>
+            <p class="eyebrow">Stock check</p>
+            <h2 id="stock-title">What is left?</h2>
+          </div>
+          <button class="iconbtn" type="button" data-close-stock aria-label="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="sheet__body">
+          <form class="add-form" id="stock-form">
+            <label class="field">
+              <span>Item</span>
+              <input id="stock-item" list="item-list" value="tomatoes" autocomplete="off" required>
+            </label>
+            <label class="field">
+              <span>How much is left? (kg)</span>
+              <input id="stock-qty" type="number" inputmode="decimal" step="any" min="0" placeholder="2" required>
+            </label>
+            <button class="btn btn--primary btn--wide" type="submit">Save count</button>
+            <p class="add-hint">We compare this with what you bought.</p>
+          </form>
         </div>
       </div>
     </div>
@@ -323,6 +358,7 @@
     <div class="snackbar" id="toasts" aria-live="polite" aria-atomic="false"></div>
   </div>
 
+  <script src="local.js" defer></script>
   <script src="app.js" defer></script>
 </body>
 </html>

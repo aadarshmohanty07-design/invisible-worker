@@ -1,46 +1,65 @@
-# Invisible Worker — Backend (CASCADE '26, Theme 1, Problem 2)
+# Invisible Worker (CASCADE '26, Theme 1, Problem 2)
 
-Offline-first probabilistic ledger for street vendors. This repo holds the **non-frontend**
-workstream: the shared JSON contracts, a FastAPI mock server, SQLite persistence, real Monte
-Carlo / Dirichlet math, and a hand-rolled three-device CRDT simulation.
+**Real profit, not just cash in hand.**
 
-The Flutter app is built separately and talks to this server over local Wi-Fi during the demo.
+A street vendor can take ₹2,400 in a day and still end up with less: stock spoils, a few plates go
+missing, a customer pays tomorrow. Invisible Worker turns the notes a vendor already makes — a photo
+of a bill, a voice note, a few taps — into one honest daily number with a range and a confidence,
+and it does that **entirely on the phone, with no internet**.
 
-The AI extraction layer (speech / OCR) is replaceable. This repo builds what sits under it: the
-uncertainty math, offline SQLite storage, the three-device CRDT sync, and the daily reconciliation
-that accounts for missing stock.
+Two cooperating pieces live in this repo:
 
-## Demo architecture
+- `frontend/` — the product: an offline-first PWA. Notes, media and the daily model live in
+  IndexedDB; Today, Records and Why need no server. The server is optional and only used to sync
+  notes from another phone.
+- `backend/` — the reference API: shared JSON contracts, SQLite persistence, Monte Carlo and
+  Dirichlet math, a three-device CRDT simulation, and the contract tests. It also backs the
+  optional sync endpoint (`/events`).
+
+**Why this is different from a khata app:** a khata records what was said. Invisible Worker checks
+it. Notes about the same purchase are fused into one record; if they disagree, the range gets wider
+and the record is marked "To check"; a phone with a wrong date cannot reorder history; missing stock
+is priced and subtracted. Instead of a fake exact number it reports, for example, "₹1,200, give or
+take ₹177, 93% sure", and every number opens to the notes behind it.
+
+The AI extraction layer (speech / OCR) is still replaceable. Today the app attaches the photo or
+voice note as evidence and the vendor confirms the values; the uncertainty and reconciliation
+machinery underneath is real.
+
+## Architecture
 
 ```
-Flutter app or web control panel (phone/laptop)
-        --HTTP over LAN-->  FastAPI on laptop (0.0.0.0:8000)
-                                      |          |
-                                      |          +--> data/invisible_worker.db (SQLite)
-                                      +--------------> /ui  (built-in rehearsal dashboard)
-
-CRDT simulation: three in-memory ledger replicas (device-a / device-b / device-c)
+Phone (PWA installed from Chrome)
+  frontend/index.html + styles.css + app.js
+  frontend/local.js   <- IndexedDB notes/media, fusion, daily summary, stock, sync
+        |
+        |  optional HTTPS sync of notes (/events)
+        v
+FastAPI on the laptop (0.0.0.0:8000) — contracts, reference engine, SQLite, CRDT demo, /ui
 ```
 
-Everything runs on-device in the production story. For the demo we run the API on a laptop:
-embedding Python with Chaquopy or porting the engine to Dart is out of scope right now.
+Everything the vendor sees runs on the phone. The laptop API is a shared shop server for sync and
+the reference engine, not a dependency for the money book.
 
 ## Quickstart
 
 ```bash
 py -3 -m pip install -r backend/requirements.txt
 
-# start the server (LAN-accessible, single worker)
+# 1. start the shop server (needed for sync and the reference API)
 py -3 -m uvicorn backend.main:app --host 0.0.0.0 --port 8000
+
+# 2. open the app (works offline after the first load)
+#    http://127.0.0.1:8000/ui/
+
+# 3. install it on an Android phone, with a public HTTPS link and no phone setup
+py -3 serve_android.py --tunnel
 
 # contract + persistence + CRDT tests
 py -3 -m pytest backend -v
 ```
 
 Interactive API docs: <http://127.0.0.1:8000/docs>
-
-Demo control panel: <http://127.0.0.1:8000/ui/> (or `http://<laptop-lan-ip>:8000/ui/` from a
-phone on the same Wi-Fi).
 
 The CRDT state is in-process. Run **one uvicorn worker**; multiple workers would each have their
 own replica state.
@@ -63,42 +82,108 @@ If the phone cannot connect:
   local subnet (`192.168.0.0/16`) while demoing.
 - Confirm the phone can open `http://<laptop-lan-ip>:8000/health` in its browser.
 
-The same base URL with `/ui/` opens the web control panel on the phone:
+The same base URL with `/ui/` opens the app on the phone:
 `http://<laptop-lan-ip>:8000/ui/`.
 
-## Demo app (`/ui/`)
+## The app (`/ui/`)
 
-A no-build, Android-style app is served by the same FastAPI process from `frontend/`. Plain
-HTML/CSS/JavaScript, no external assets, works over the LAN. It is a rehearsal and demo surface;
-the Flutter app consumes the same API and contracts.
+A no-build PWA in `frontend/`. It starts empty: you add a photo, a voice note or a few typed
+values, and every screen is computed on the phone from those notes. No API is needed to use it.
 
-**Install it like an app:** on an Android phone, open `/ui/` in Chrome and choose *Add to Home
-screen* (manifest + service worker + app icon are included). It then launches full-screen with its
-own icon. On a laptop (window wider than 700 px) the same page renders inside a phone frame so the
-demo still reads as an app.
+**Adding a note** (+ button, or "Add a note"):
 
-**Layout:** top app bar with live API status, a FAB with quick actions, and a bottom tab bar —
+1. Choose **Photo**, **Voice** or **Type**. A photo uses the phone camera and is compressed on the
+   phone; a voice note is recorded with the mic. Both are stored with the note in IndexedDB.
+2. Say whether it was money spent or money received, then enter the item, quantity, unit and amount
+   (and optionally what was said). Speech-to-text and OCR are not required: the evidence is
+   attached and you confirm the values.
+3. Save. A note joins a matching note about the same item and quantity within 30 minutes; two
+   agreeing notes are marked **Checked** and get a tighter range, a disagreement is marked
+   **To check** and widens the range.
 
-- **Today** — true profit ₹1,200 ± ₹179.51 with a confidence ring, the canonical ₹180 ± ₹25 money
-  shot, the ghost-inventory gap (2.1 kg counted vs 2.895 kg expected = 0.795 kg / ₹47.7 missing,
-  inside the model's 1σ band), the profit waterfall, the Dirichlet loss split, and the evidence
-  summary with the SHA-256 ledger fingerprint.
-- **Ledger** — every entry as a card with filter chips (All / Fused / Pending / 1970 clock); tap
-  any entry for the **Trust Receipt** bottom sheet: evidence cards, agreement/disagreement math,
-  per-source counterfactuals, stored vs simulated values, and the plain-language narrative.
-- **Sync** — device cards, the derived merge log, the hostile-clock result, and the logical-order
-  proof that the 1970 probe lands at the bottom, not the top.
-- **More** — the six demo scenarios (money shot, noisy quotes, pending pair, sync, 1970 clock,
-  reset), udhaar and recipe panels, raw events with a pending-only switch, seed IDs with copy
-  buttons, the API-base setting, and a dark-theme toggle (follows the system by default).
+**Screens**
 
-Suggested rehearsal sequence:
+- **Today** — "You made today" with a range and how sure, money in / money out / missing, the stock
+  check, and the latest checked note. The breakdown, note summary and proof code are under "See all
+  the numbers". In a fresh install it offers **Add a note** and **See an example day**.
+- **Records** — every record with a plain title, money in or out, how sure, and a
+  Checked / Saved / To check / Wrong date tag; filters by direction. Tap for **Why ₹X?**: the
+  photo/voice evidence (the photo is shown, the voice note can be played), the notes that agree,
+  what each alone would give, and the model detail.
+- **Phones** — this phone and any phones that synced, with "Sync with shop". Notes are already
+  saved here; sync only moves unsynced notes to the shop server and pulls notes from other phones.
+- **More** — count stock, start over, dark screen, and **Advanced** (shop server, all notes on this
+  phone, load the example day).
 
-1. Open `/ui/` on the phone or laptop.
-2. **Money shot** → open the Trust Receipt and show the pinned seed vs live simulation.
-3. **Noisy quotes** → show the range widening from about ₹16 to ₹43 at 40% price disagreement.
-4. **Reset demo** → **Sync phones** → show the two-step merge log and 3 resolved conflicts.
-5. **1970 clock** → show the probe at the bottom of the logical order, not the top.
+**Offline model** (`frontend/local.js`)
+
+- Notes and media live in IndexedDB. Photos are compressed to max 1400 px; audio stays as recorded.
+- A record is one or more notes about the same purchase or sale. Fusion uses an inverse-variance
+  mean, combined confidence, and a wider range when the notes disagree by more than 15% in price.
+- Money in/out are sums of records; missing is the priced stock gap; the daily range is the
+  combined uncertainty plus a 5% cushion for cash that was never noted.
+- Stock: expected = everything bought for that item in this book; missing = expected − counted;
+  value = missing × the latest unit cost. Counting uses records, not evidence notes, so a purchase
+  photographed twice is not counted twice.
+- Ordering uses the order notes were added, not the phone clock. A note with a 1970 timestamp is
+  still evidence but is pinned at the end, so it cannot jump the queue.
+- Sync: every note has a UUID and is posted to `/events` idempotently; `media_ref` carries the
+  direction and account. Syncing twice never duplicates a note, and notes from another phone about
+  the same item, quantity and time are fused into the same record.
+
+Suggested rehearsal (five minutes, on the phone, in airplane mode after the first load):
+
+1. **Start over** (More) → Today shows ₹0 and an **Add a note** button.
+2. Take a photo of a bill and enter the amount; record a voice note for the same purchase and enter
+   the same amount → the record becomes **Checked** with two notes.
+3. Add the same item again with a different amount → the range widens and the record becomes
+   **To check**.
+4. **Count stock** → the missing kilos and rupees appear on Today and are subtracted from profit.
+5. Toggle airplane mode: the app keeps working. **Phones → Sync with shop** sends the notes and
+   pulls notes from another phone.
+6. **See an example day** loads the full 9-note demo day (₹2,400 in, ₹1,146 out, ₹54 missing →
+   ₹1,200 give or take ₹177, 93% sure).
+
+## Install on a real Android phone
+
+The demo installs on a physical Android phone as a standalone PWA. Chrome only installs from a
+trusted HTTPS origin, so there are two routes, both driven by `serve_android.py`.
+
+**A. Temporary public HTTPS link (no setup on the phone)**
+
+```bash
+py -3 serve_android.py --tunnel
+```
+
+Downloads Cloudflare's `cloudflared` once into `data/bin/` (~55 MB), starts the app if it is not
+already running, then prints a scannable QR code and a `https://<random>.trycloudflare.com/ui/`
+URL. On the phone, open the URL in Chrome → three-dot menu → **Install app**. No certificate is
+involved, and the phone can be on mobile data. The link is public and temporary: it dies when the
+process exits, and a new URL is issued each run.
+
+**B. Same Wi-Fi, no internet**
+
+```bash
+py -3 serve_android.py          # OR: py -3 serve_android.py --ip 192.168.1.23
+```
+
+Mints a local certificate authority with OpenSSL, serves the app over HTTPS on port 8443, and puts
+a phone-facing install page on port 8080 with a certificate download and a live trust check.
+
+1. Scan the QR code → the install page opens over plain HTTP.
+2. **Download certificate** → install it as a **CA certificate** (Settings → Security & privacy →
+   More security settings → Encryption & credentials → Install a certificate → CA certificate).
+   Android warns that your network may be monitored; that warning is expected for a certificate
+   you installed yourself.
+3. **Open Invisible Worker** over HTTPS, then Chrome's three-dot menu → **Install app**.
+
+The certificate lives in `data/certs/` (gitignored) and is re-issued when the laptop's IP changes;
+the CA itself is kept so the phone does not need to reinstall anything. Allow Python through
+Windows Defender Firewall for **Private** networks on ports 8080 and 8443. Without the
+certificate, the app still runs in a Chrome tab at `http://<laptop-lan-ip>:8000/ui/`, but Chrome
+will not install it from there.
+
+In both cases the icon lands on the home screen and opens full-screen without an address bar.
 
 ## Endpoints
 
@@ -128,10 +213,10 @@ raises a server error instead of returning bad data.
 | POST   | `/demo/reset`                       | `LedgerEntry[]`         | Restore seed state and re-arm the CRDT simulation |
 
 CORS is open (`*`) because the demo only runs on a trusted LAN. There is no authentication. The
-`/ui/` and `/` rows are served by the static dashboard; every other row is a JSON API endpoint
+`/ui/` and `/` rows are served by the PWA; every other row is a JSON API endpoint
 validated against `schemas.json`.
 
-## The demo money shot
+## The tomato fusion example (API)
 
 `GET /ledger` always contains the canonical entry after a reset:
 
