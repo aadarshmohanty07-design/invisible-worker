@@ -1,0 +1,1561 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:invisible-worker:schemas:v1",
+  "title": "Invisible Worker - Shared Data Contracts (v1)",
+  "description": "Canonical shapes for the Invisible Worker probabilistic ledger. Flow: raw TransactionEvent(s) are fused into one balanced LedgerEntry; unrecorded stock loss on an inventory account is explained by a LossDistribution. Conventions: (1) Money is non-negative and expressed in major currency units; debit/credit carries direction, never a minus sign. (2) Uncertainty is mean +/- std_dev (1 sigma); the approximate 95% band is mean +/- 1.96 sigma. (3) wall_clock is untrusted - 1970 or future resets are valid input - so all ordering uses (logical_clock, device_id, id). (4) IDs are RFC 4122 UUIDs; field names are snake_case. (5) additionalProperties is false everywhere, so extend this schema deliberately instead of smuggling extra fields. To validate an instance, resolve against {\"$ref\": \"#/$defs/<Type>\"} (TransactionEvent, LedgerEntry or LossDistribution).",
+  "$defs": {
+    "Account": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120,
+      "pattern": "^[^:]+(:[^:]+)*$",
+      "description": "Double-entry account path using ':' as the hierarchy separator. Examples: 'Cash', 'Inventory:Tomatoes', 'Udhaar:Sharma ji', 'Expenses:Spoilage'. Segments may use any script and may contain spaces; empty segments are invalid. Debit and credit accounts within one entry must differ."
+    },
+
+    "TransactionEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Transaction Event (raw evidence)",
+      "description": "One unmerged capture from one channel. Several events may describe the same real-world transaction; fusing them is the engine's job. Raw events are append-only: never edit or delete one, and never overwrite raw_text after a Lexicon Drop. Re-interpretation produces a new event or a new fusion, preserving auditability.",
+      "required": [
+        "event_id",
+        "device_id",
+        "source",
+        "raw_text",
+        "wall_clock",
+        "logical_clock",
+        "confidence",
+        "currency",
+        "extracted_entities"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "RFC 4122 UUID generated on the capturing device. Globally unique; used for provenance, de-duplication and fusion bookkeeping."
+        },
+        "device_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "CRDT actor ID of the capturing device, e.g. 'device-a'. Together with logical_clock it gives a total order that survives hostile wall clocks."
+        },
+        "source": {
+          "type": "string",
+          "enum": ["audio", "ocr", "sms", "manual"],
+          "description": "Capture channel. audio = ambient speech transcript; ocr = text read from a photo or slip; sms = delayed SMS chime or pasted SMS; manual = quick-tally keypad."
+        },
+        "raw_text": {
+          "type": "string",
+          "maxLength": 20000,
+          "description": "Verbatim transcript, OCR output, SMS body or typed tally before normalization or lexicon mapping. May be empty if nothing was legible (see confidence). Never rewritten; re-process with a newer lexicon instead."
+        },
+        "wall_clock": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Device-reported capture time as ISO 8601 with offset. UNTRUSTED: a 1970 reset or a timestamp in the future is valid input. Never order history by this field alone."
+        },
+        "logical_clock": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lamport counter maintained by device_id. The canonical ordering key is (logical_clock, device_id, event_id), so delayed SMS messages and out-of-order delivery cannot reorder history."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Probability that the capture is intelligible and correctly transcribed, given noise, blur, oil stains and compression. 0..1."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 code for every price in extracted_entities, e.g. 'INR'. Prices use major units: 180.0 means 180 rupees, not paise."
+        },
+        "extracted_entities": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/ExtractedEntity" },
+          "description": "Structured lines the extractor could parse. May be partial or empty: clauses that were heard but not understood (for example a customer-credit phrase such as 'Sharma ji ka 40 jama kar') remain only in raw_text until a Lexicon Drop maps them."
+        },
+        "language": {
+          "type": "string",
+          "maxLength": 35,
+          "description": "Optional BCP-47 tag of the dominant language, e.g. 'hi-IN' or 'en-IN'."
+        },
+        "media_ref": {
+          "type": "string",
+          "maxLength": 2048,
+          "description": "Optional device-local URI or path to the original audio/photo for audit and re-processing. Not synced by value."
+        },
+        "lexicon_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Optional ID of the Lexicon Drop snapshot applied when interpreting raw_text. Replaying with a newer lexicon must create a new interpretation, never mutate this event."
+        }
+      },
+      "examples": [
+        {
+          "event_id": "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+          "device_id": "device-a",
+          "source": "audio",
+          "raw_text": "Bhai 3 kilo tamatar liya 180 mein... Sharma ji ka 40 jama kar, aur 7 plate poha de.",
+          "wall_clock": "2026-10-25T09:14:00+05:30",
+          "logical_clock": 42,
+          "confidence": 0.85,
+          "currency": "INR",
+          "language": "hi-IN",
+          "lexicon_id": "lex-v3",
+          "media_ref": "file:///data/user/0/app/evidence/audio_0914.m4a",
+          "extracted_entities": [
+            {
+              "item": "tamatar",
+              "qty": 3.0,
+              "unit": "kg",
+              "price": 180.0,
+              "confidence": 0.88,
+              "raw_span": { "start": 5, "end": 33 }
+            }
+          ]
+        },
+        {
+          "event_id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+          "device_id": "device-b",
+          "source": "ocr",
+          "raw_text": "TOMATO 3 KG 180\nONION 2 KG",
+          "wall_clock": "1970-01-01T00:00:00+05:30",
+          "logical_clock": 17,
+          "confidence": 0.62,
+          "currency": "INR",
+          "media_ref": "file:///data/user/0/app/evidence/slip_0042.jpg",
+          "extracted_entities": [
+            {
+              "item": "tomato",
+              "qty": 3.0,
+              "unit": "kg",
+              "price": 180.0,
+              "confidence": 0.9
+            },
+            {
+              "item": "onion",
+              "qty": 2.0,
+              "unit": "kg",
+              "price": null,
+              "confidence": 0.3
+            }
+          ]
+        }
+      ]
+    },
+
+    "ExtractedEntity": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Extracted Entity (one evidence line)",
+      "description": "One item/quantity/price line parsed from an event. A line may be uncertain; price = null means the extractor recognized an item but no legible price, which must never be coerced to zero.",
+      "required": ["item", "qty", "unit", "price"],
+      "properties": {
+        "item": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Item token exactly as captured, before canonicalization, e.g. 'tamatar' or 'tomato'. Canonical English account names belong in the ledger, not here."
+        },
+        "qty": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Quantity in unit. Floats are allowed because portion sizes and non-standard units fluctuate."
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Unit token exactly as captured, e.g. 'kg', 'kilo', 'peti', 'dozen' or 'plate'. Normalization to a canonical unit is engine-side; the raw token is preserved."
+        },
+        "price": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "description": "Extended line price (qty x unit price) in the event currency's major units. null = missing or illegible; never treat null as 0.0."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Optional per-line extraction confidence. Consumers fall back to the event-level confidence when absent."
+        },
+        "raw_span": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "description": "Optional [start, end) character offsets into the parent raw_text, used for audit and UI highlighting.",
+          "properties": {
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          }
+        }
+      }
+    },
+
+    "LedgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Ledger Entry (probabilistic double-entry posting)",
+      "description": "The fused, balanced output of the probabilistic engine: exactly one transaction and one CRDT document per real-world event. Engine-enforced invariants that JSON Schema cannot compare: debit.amount_mean == credit.amount_mean within 0.01, debit.amount_std_dev == credit.amount_std_dev, debit.account != credit.account, and every event_id resolves to an existing TransactionEvent. Conflicting replicas of the same transaction_id are resolved deterministically by highest (logical_clock, device_id); a reversal is a new version with status = voided, never a deletion.",
+      "required": [
+        "transaction_id",
+        "status",
+        "debit",
+        "credit",
+        "confidence",
+        "currency",
+        "event_ids",
+        "logical_clock",
+        "device_id"
+      ],
+      "properties": {
+        "transaction_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Stable ID of the fused transaction; the CRDT document key. The same real transaction keeps the same ID on every device."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "fused", "posted", "voided"],
+          "description": "pending = single-event estimate awaiting corroboration; fused = two or more events merged; posted = committed to the canonical ledger; voided = reversed but retained as a tombstone for audit."
+        },
+        "debit": { "$ref": "#/$defs/Posting" },
+        "credit": { "$ref": "#/$defs/Posting" },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Overall confidence that this entry reflects the real-world transaction. Usually lower than the best individual source event because fusion accounts for disagreement."
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 currency shared by both postings, e.g. 'INR'."
+        },
+        "event_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uuid" },
+          "description": "Provenance: every TransactionEvent fused into this entry, in any order. Unique so no evidence is counted twice (prevents triple-counting across audio, OCR and SMS)."
+        },
+        "logical_clock": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Lamport clock at fusion; it must be greater than every source event's logical_clock. The ordering key is (logical_clock, device_id, transaction_id)."
+        },
+        "device_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "CRDT actor ID of the device that authored this fused entry, e.g. 'device-a'."
+        },
+        "business_date": {
+          "type": "string",
+          "format": "date",
+          "description": "Optional accounting date (YYYY-MM-DD) reconstructed from logical order, never from wall_clock. Used for daily accrual profit."
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Optional timestamp of when the engine produced this entry. Informational only; it is not an ordering key."
+        },
+        "clock_suspect": {
+          "type": "boolean",
+          "default": false,
+          "description": "Optional flag set when any source wall_clock is implausible (before 2000-01-01 or more than 24 hours in the future). Drives the warning icon in the UI; ordering still uses logical_clock."
+        },
+        "loss_distribution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional link to the LossDistribution attributed to this entry."
+        },
+        "lexicon_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" },
+          "description": "Optional list of Lexicon Drop snapshots that influenced the interpretation of the fused events."
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 2000,
+          "description": "Optional human-readable note, e.g. why a piece of evidence was rejected."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "fused" } },
+            "required": ["status"]
+          },
+          "then": {
+            "properties": { "event_ids": { "minItems": 2 } }
+          }
+        }
+      ],
+      "examples": [
+        {
+          "transaction_id": "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
+          "status": "fused",
+          "debit": {
+            "account": "Inventory:Tomatoes",
+            "amount_mean": 180.0,
+            "amount_std_dev": 25.0,
+            "qty_mean": 3.0,
+            "qty_std_dev": 0.4,
+            "unit": "kg"
+          },
+          "credit": {
+            "account": "Cash",
+            "amount_mean": 180.0,
+            "amount_std_dev": 25.0
+          },
+          "confidence": 0.82,
+          "currency": "INR",
+          "event_ids": [
+            "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+            "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+          ],
+          "logical_clock": 43,
+          "device_id": "device-a",
+          "business_date": "2026-10-25",
+          "created_at": "2026-10-25T09:16:20+05:30",
+          "clock_suspect": true
+        }
+      ]
+    },
+
+    "Posting": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Posting (one side of a double-entry transaction)",
+      "description": "A probabilistic account posting. mean +/- std_dev is a 1-sigma band, so the approximate 95% interval is mean +/- 1.96 sigma. Amounts are non-negative: the debit/credit side carries direction. Quantity fields are optional and belong only to quantity-bearing accounts such as Inventory.",
+      "required": ["account", "amount_mean", "amount_std_dev"],
+      "properties": {
+        "account": { "$ref": "#/$defs/Account" },
+        "amount_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected amount in the parent entry's currency, major units (180.0 = 180 rupees)."
+        },
+        "amount_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of the amount. Use 0.0 only for genuinely known amounts, such as cash physically counted."
+        },
+        "qty_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Optional expected quantity for quantity-bearing accounts. Omit for Cash."
+        },
+        "qty_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Optional 1-sigma uncertainty of the quantity. Must not appear without qty_mean and unit."
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Canonical unit for the qty fields, e.g. 'kg'. Required whenever qty_mean is present."
+        }
+      },
+      "dependentRequired": {
+        "qty_mean": ["unit"],
+        "qty_std_dev": ["qty_mean", "unit"]
+      }
+    },
+
+    "LossDistribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Loss Distribution (attribution of unrecorded stock loss)",
+      "description": "Probabilistic split of unexplained inventory loss into spoilage, theft and personal consumption, conditioned on environmental covariates. The distribution is Dirichlet over cause shares; qty_lost and value_lost describe the magnitude. Engine-enforced invariants that JSON Schema cannot sum: share_mean values sum to 1.0 (+/- 0.001), each cause appears exactly once, alpha has one positive entry per component in the same order, and value_lost quantiles satisfy q05 <= q50 <= q95 when present.",
+      "required": [
+        "loss_distribution_id",
+        "account",
+        "currency",
+        "qty_lost",
+        "value_lost",
+        "components",
+        "covariates",
+        "allocation",
+        "confidence",
+        "evidence_event_ids",
+        "method",
+        "computed_at",
+        "model_version"
+      ],
+      "properties": {
+        "loss_distribution_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Stable ID of this computed estimate."
+        },
+        "transaction_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Optional link to a single LedgerEntry when the loss belongs to one purchase. Omit for period-level reconciliation; then period is required."
+        },
+        "account": {
+          "$ref": "#/$defs/Account",
+          "description": "Inventory (or expense) account whose loss is attributed, e.g. 'Inventory:Tomatoes'."
+        },
+        "period": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["start", "end"],
+          "description": "Optional reconciliation window for aggregate losses. Required unless transaction_id is present.",
+          "properties": {
+            "start": { "type": "string", "format": "date-time" },
+            "end": { "type": "string", "format": "date-time" }
+          }
+        },
+        "currency": {
+          "type": "string",
+          "pattern": "^[A-Z]{3}$",
+          "description": "ISO 4217 code for value_lost, e.g. 'INR'."
+        },
+        "qty_lost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mean", "std_dev", "unit"],
+          "description": "Estimated unrecorded quantity. Both mean and std_dev are non-negative.",
+          "properties": {
+            "mean": { "type": "number", "minimum": 0 },
+            "std_dev": { "type": "number", "minimum": 0 },
+            "unit": { "type": "string", "minLength": 1, "maxLength": 32 }
+          }
+        },
+        "value_lost": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["mean", "std_dev"],
+          "description": "Monetary value of the loss in parent currency major units. mean +/- std_dev is the primary interval; q05, q50 and q95 are optional percentiles.",
+          "properties": {
+            "mean": { "type": "number", "minimum": 0 },
+            "std_dev": { "type": "number", "minimum": 0 },
+            "q05": { "type": "number", "minimum": 0 },
+            "q50": { "type": "number", "minimum": 0 },
+            "q95": { "type": "number", "minimum": 0 }
+          }
+        },
+        "components": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/LossComponent" },
+          "description": "Exactly one component per cause: spoilage, theft and personal_consumption, in any order. share_mean values form a probability simplex over the three causes."
+        },
+        "covariates": {
+          "type": "object",
+          "description": "Drivers used by the attribution model. The known keys are listed; extra scalar keys are allowed for future covariates.",
+          "properties": {
+            "temperature_c": {
+              "type": "number",
+              "minimum": -50,
+              "maximum": 60,
+              "description": "Ambient storage temperature in Celsius."
+            },
+            "humidity_pct": { "type": "number", "minimum": 0, "maximum": 100 },
+            "hours_unrefrigerated": { "type": "number", "minimum": 0 },
+            "hours_since_receipt": { "type": "number", "minimum": 0 },
+            "sales_units_observed": { "type": "number", "minimum": 0 },
+            "expected_sales_units": {
+              "type": "number",
+              "minimum": 0,
+              "description": "Recipe-inference forecast; a shortfall raises the probability of theft or personal consumption."
+            }
+          },
+          "additionalProperties": {
+            "type": ["number", "string", "boolean", "null"]
+          }
+        },
+        "allocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["family", "alpha"],
+          "description": "Generative model for the cause shares. A larger sum(alpha) means a tighter, more confident split.",
+          "properties": {
+            "family": {
+              "const": "dirichlet"
+            },
+            "alpha": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3,
+              "items": { "type": "number", "exclusiveMinimum": 0 },
+              "description": "Dirichlet concentration parameters in the same order as components. Expected share_i = alpha_i / sum(alpha)."
+            }
+          }
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence in the attribution as a whole. 0..1."
+        },
+        "evidence_event_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "format": "uuid" },
+          "description": "Raw events (purchases, sales, stock counts, SMS) that fed the estimate. No duplicates."
+        },
+        "method": {
+          "type": "string",
+          "enum": ["dirichlet_bayesian", "monte_carlo"],
+          "description": "How the split was produced. dirichlet_bayesian is the default; monte_carlo records a simulation result that was fitted back to Dirichlet parameters."
+        },
+        "computed_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "When the estimate was computed. Informational; it is not an ordering key for ledger history."
+        },
+        "model_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "Version of the attribution model and covariate mapping, e.g. 'loss-attribution-v1.0'."
+        },
+        "explanation": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional one-line human summary for the dashboard tooltip, e.g. 'Spoilage dominates: 34C heat and 9h unrefrigerated.'"
+        }
+      },
+      "anyOf": [
+        { "required": ["transaction_id"] },
+        { "required": ["period"] }
+      ],
+      "examples": [
+        {
+          "loss_distribution_id": "d4c3b2a1-0f9e-4d8c-8b7a-6f5e4d3c2b1a",
+          "account": "Inventory:Tomatoes",
+          "period": {
+            "start": "2026-10-25T00:00:00+05:30",
+            "end": "2026-10-26T00:00:00+05:30"
+          },
+          "currency": "INR",
+          "qty_lost": {
+            "mean": 0.9,
+            "std_dev": 0.25,
+            "unit": "kg"
+          },
+          "value_lost": {
+            "mean": 54.0,
+            "std_dev": 15.0,
+            "q05": 29.3,
+            "q50": 54.0,
+            "q95": 78.7
+          },
+          "components": [
+            {
+              "cause": "spoilage",
+              "share_mean": 0.55,
+              "share_std_dev": 0.078,
+              "driver": "34C heat and 9h unrefrigerated; tomatoes lose about 8% per day."
+            },
+            {
+              "cause": "theft",
+              "share_mean": 0.2,
+              "share_std_dev": 0.063,
+              "driver": "4 fewer plate-sales than expected, yet no stock remained on hand."
+            },
+            {
+              "cause": "personal_consumption",
+              "share_mean": 0.25,
+              "share_std_dev": 0.068,
+              "driver": "Household meals draw from the same tomato stock."
+            }
+          ],
+          "covariates": {
+            "temperature_c": 34.0,
+            "humidity_pct": 71.0,
+            "hours_unrefrigerated": 9.0,
+            "hours_since_receipt": 12.3,
+            "sales_units_observed": 40.0,
+            "expected_sales_units": 44.0
+          },
+          "allocation": {
+            "family": "dirichlet",
+            "alpha": [22.0, 8.0, 10.0]
+          },
+          "confidence": 0.71,
+          "evidence_event_ids": [
+            "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+            "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+            "7c6b5a4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d"
+          ],
+          "method": "dirichlet_bayesian",
+          "computed_at": "2026-10-25T21:30:00+05:30",
+          "model_version": "loss-attribution-v1.0",
+          "explanation": "Spoilage dominates: 34C heat and 9h unrefrigerated, plus 4 fewer plate-sales than expected."
+        }
+      ]
+    },
+
+    "LossComponent": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Loss Component (one attributed cause)",
+      "description": "Fraction of unrecorded stock loss attributed to one cause. Across the three components the shares form a probability distribution that sums to 1.",
+      "required": ["cause", "share_mean", "share_std_dev", "driver"],
+      "properties": {
+        "cause": {
+          "type": "string",
+          "enum": ["spoilage", "theft", "personal_consumption"],
+          "description": "spoilage = rot, pest or handling loss; theft = third-party removal; personal_consumption = stock used by the vendor's household instead of being sold."
+        },
+        "share_mean": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Expected share of total loss. share_mean values across the three components sum to 1.0."
+        },
+        "share_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.5,
+          "description": "1-sigma uncertainty of the share. Values above 0.5 are impossible for a variable confined to [0, 1]."
+        },
+        "driver": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280,
+          "description": "Short causal explanation shown in the UI tooltip, e.g. 'High spoilage due to 34C heat'."
+        }
+      }
+    },
+
+    "ProfitSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Profit Summary (true accrual profit for one period)",
+      "description": "Dashboard summary for one business day or period. Profit is accrual-based, not cash on hand: profit_mean = revenue_mean - cogs_mean - loss_mean (within rounding). All values are in the vendor's local currency major units. Uncertainty is 1 sigma, so the approximate 95% band is mean +/- 1.96 std_dev.",
+      "required": [
+        "revenue_mean",
+        "revenue_std_dev",
+        "cogs_mean",
+        "cogs_std_dev",
+        "loss_mean",
+        "loss_std_dev",
+        "profit_mean",
+        "profit_std_dev",
+        "time_period"
+      ],
+      "properties": {
+        "revenue_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected sales revenue for the period."
+        },
+        "revenue_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of revenue."
+        },
+        "cogs_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected cost of goods actually consumed or sold (not merely purchased), inferred without a formal Bill of Materials."
+        },
+        "cogs_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of COGS."
+        },
+        "loss_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected value of unrecorded stock loss (spoilage + theft + personal consumption)."
+        },
+        "loss_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of the loss value."
+        },
+        "profit_mean": {
+          "type": "number",
+          "description": "Expected true accrual profit. May be negative."
+        },
+        "profit_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of profit, combining revenue, COGS and loss uncertainty."
+        },
+        "time_period": {
+          "type": "string",
+          "format": "date",
+          "description": "Business day this summary covers, formatted YYYY-MM-DD, e.g. '2026-10-25'."
+        }
+      },
+      "examples": [
+        {
+          "revenue_mean": 2400.0,
+          "revenue_std_dev": 160.0,
+          "cogs_mean": 1146.0,
+          "cogs_std_dev": 80.0,
+          "loss_mean": 54.0,
+          "loss_std_dev": 15.0,
+          "profit_mean": 1200.0,
+          "profit_std_dev": 180.0,
+          "time_period": "2026-10-25"
+        }
+      ]
+    },
+
+    "RecipeBurnRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Recipe Burn Rate (inferred ingredient use per serving)",
+      "description": "Zero-shot recipe inference result: how much of one ingredient is used per single plate or cup, inferred from purchases, sales and wastage without a Bill of Materials. To display a per-40-plates figure, multiply qty_per_plate_mean and qty_per_plate_std_dev by 40.",
+      "required": [
+        "dish_name",
+        "ingredient_name",
+        "qty_per_plate_mean",
+        "qty_per_plate_std_dev",
+        "unit",
+        "confidence",
+        "explanation"
+      ],
+      "properties": {
+        "dish_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Dish or drink name, e.g. 'Poha' or 'Chai'."
+        },
+        "ingredient_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Ingredient name, e.g. 'Rice flakes' or 'Milk'."
+        },
+        "qty_per_plate_mean": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Expected quantity of this ingredient used per one plate or cup, in unit."
+        },
+        "qty_per_plate_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of the per-serving quantity."
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "description": "Canonical unit of the per-serving quantity, e.g. 'kg' or 'L'."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence that the inferred burn rate is close to the true recipe."
+        },
+        "explanation": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "description": "Plain-language basis for the inference, e.g. 'About 2.1 kg per 40 plates, from purchases vs. plates sold.'"
+        }
+      },
+      "examples": [
+        {
+          "dish_name": "Poha",
+          "ingredient_name": "Rice flakes",
+          "qty_per_plate_mean": 0.0525,
+          "qty_per_plate_std_dev": 0.0075,
+          "unit": "kg",
+          "confidence": 0.72,
+          "explanation": "About 2.1 kg +/- 0.3 kg per 40 plates, inferred from 84 kg purchased vs. 1,600 plates sold over 20 days."
+        }
+      ]
+    },
+
+    "CustomerCredit": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Customer Credit (implicit udhaar balance for one alias)",
+      "description": "Reconciled credit for one customer alias. balance_mean is the expected outstanding balance: positive means the customer owes the vendor, negative means the customer has paid in advance. Uncertainty is 1 sigma, so the approximate 95% band is balance_mean +/- 1.96 balance_std_dev.",
+      "required": [
+        "customer_alias",
+        "balance_mean",
+        "balance_std_dev",
+        "confidence"
+      ],
+      "properties": {
+        "customer_alias": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Local alias or name used for this customer, e.g. 'Sharma ji'. Aliases are reconciled to one customer by the engine."
+        },
+        "balance_mean": {
+          "type": "number",
+          "description": "Expected outstanding balance in major currency units. Positive = customer owes vendor; negative = advance paid."
+        },
+        "balance_std_dev": {
+          "type": "number",
+          "minimum": 0,
+          "description": "1-sigma uncertainty of the balance."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Confidence that the alias and balance are correctly reconciled."
+        }
+      },
+      "examples": [
+        {
+          "customer_alias": "Sharma ji",
+          "balance_mean": 160.0,
+          "balance_std_dev": 25.0,
+          "confidence": 0.78
+        }
+      ]
+    },
+
+    "LexiconEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Lexicon Entry (one taught local word or unit)",
+      "description": "A single Lexicon Drop correction. Entries are versioned: a correction to an existing term creates a higher version, and older versions are retained for audit. Raw TransactionEvents are never rewritten; re-interpretation uses the newer version.",
+      "required": [
+        "local_term",
+        "corrected_meaning",
+        "category",
+        "version"
+      ],
+      "properties": {
+        "local_term": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "Local word or unit as heard or read, e.g. 'jama kar', 'peti' or 'tamatar'."
+        },
+        "corrected_meaning": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 280,
+          "description": "Canonical meaning, e.g. 'Record as Customer Credit (Udhaar)'."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["credit", "purchase", "unit", "item"],
+          "description": "How the term changes interpretation: credit = money owed/paid; purchase = a buying phrase; unit = measurement unit; item = item name."
+        },
+        "version": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Version of this term's meaning. Starts at 1 and increases with each correction."
+        }
+      },
+      "examples": [
+        {
+          "local_term": "jama kar",
+          "corrected_meaning": "Record as Customer Credit (Udhaar)",
+          "category": "credit",
+          "version": 1
+        }
+      ]
+    },
+
+    "DeviceSyncState": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Device Sync State (one family device)",
+      "description": "Sync status for one of the family devices. last_merged_logical_clock is the highest Lamport counter this device has merged, and is the only ordering signal the UI should trust. conflicts_resolved counts contradictory ledger entries merged deterministically without data loss.",
+      "required": [
+        "device_id",
+        "status",
+        "last_merged_logical_clock",
+        "conflicts_resolved"
+      ],
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "description": "CRDT actor ID, e.g. 'device-a'."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["online", "offline", "syncing"],
+          "description": "Connection state shown on the Device Topology screen."
+        },
+        "last_merged_logical_clock": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Highest logical clock this device has merged. Never use wall clocks for this."
+        },
+        "conflicts_resolved": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of conflicting ledger entries resolved without data loss."
+        }
+      },
+      "examples": [
+        {
+          "device_id": "device-a",
+          "status": "online",
+          "last_merged_logical_clock": 44,
+          "conflicts_resolved": 0
+        }
+      ]
+    },
+
+    "MergeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Merge Result (three-device CRDT sync)",
+      "description": "Outcome of one network sync. Devices are the post-merge sync states, merge_log explains each deterministic step, ledger_after_merge is the deduplicated ledger in (logical_clock, device_id, transaction_id) order, and conflicts_resolved counts contradictory replicas resolved without dropping a transaction.",
+      "required": ["devices", "merge_log", "ledger_after_merge", "conflicts_resolved"],
+      "properties": {
+        "devices": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/DeviceSyncState" }
+        },
+        "merge_log": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ledger_after_merge": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/LedgerEntry" }
+        },
+        "conflicts_resolved": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "examples": [
+        {
+          "devices": [
+            {
+              "device_id": "device-a",
+              "status": "online",
+              "last_merged_logical_clock": 46,
+              "conflicts_resolved": 3
+            },
+            {
+              "device_id": "device-b",
+              "status": "online",
+              "last_merged_logical_clock": 46,
+              "conflicts_resolved": 4
+            },
+            {
+              "device_id": "device-c",
+              "status": "online",
+              "last_merged_logical_clock": 46,
+              "conflicts_resolved": 6
+            }
+          ],
+          "merge_log": [
+            "Device device-a (clock 45) merged with Device device-b (clock 45): 2 conflicts, 0 losses",
+            "Merged result (clock 46) merged with Device device-c (clock 45): 1 conflict, 0 losses",
+            "Final: 3 devices, 3 total entries, 3 conflicts resolved"
+          ],
+          "ledger_after_merge": [
+            {
+              "transaction_id": "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
+              "status": "fused",
+              "debit": {
+                "account": "Inventory:Tomatoes",
+                "amount_mean": 180.0,
+                "amount_std_dev": 25.0,
+                "qty_mean": 3.0,
+                "qty_std_dev": 0.4,
+                "unit": "kg"
+              },
+              "credit": {
+                "account": "Cash",
+                "amount_mean": 180.0,
+                "amount_std_dev": 25.0
+              },
+              "confidence": 0.82,
+              "currency": "INR",
+              "event_ids": [
+                "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+                "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+              ],
+              "logical_clock": 43,
+              "device_id": "device-a",
+              "business_date": "2026-10-25",
+              "created_at": "2026-10-25T09:16:20+05:30",
+              "clock_suspect": true
+            }
+          ],
+          "conflicts_resolved": 3
+        }
+      ]
+    },
+
+    "ClockResetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Clock Reset Result (hostile wall-clock recovery)",
+      "description": "Result of simulating a device whose wall clock was reset to 1970. The offending value is reported separately; the entry is appended and ordered by the logical clock, and the previous history is retained.",
+      "required": [
+        "device_id",
+        "detected_wall_clock",
+        "logical_clock_used",
+        "history_preserved",
+        "message",
+        "merge_log",
+        "ledger_after_merge"
+      ],
+      "properties": {
+        "device_id": {
+          "type": "string"
+        },
+        "detected_wall_clock": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "logical_clock_used": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "history_preserved": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "merge_log": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ledger_after_merge": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/LedgerEntry" }
+        }
+      },
+      "examples": [
+        {
+          "device_id": "device-b",
+          "detected_wall_clock": "1970-01-01T00:00:00+05:30",
+          "logical_clock_used": 45,
+          "history_preserved": true,
+          "message": "Hostile clock detected on device-b. Wall clock ignored. Entry reordered by logical clock 45. No history lost, no double-counting.",
+          "merge_log": [
+            "device-b wall clock 1970-01-01T00:00:00+05:30 is implausible; logical clock 45 assigned.",
+            "Device device-b (clock 46) merged with Device device-a (clock 45): 0 conflicts, 0 losses",
+            "Merged result (clock 47) merged with Device device-c (clock 45): 0 conflicts, 0 losses",
+            "Final: 4 entries in logical-clock order; 0 history lost."
+          ],
+          "ledger_after_merge": [
+            {
+              "transaction_id": "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
+              "status": "fused",
+              "debit": {
+                "account": "Inventory:Tomatoes",
+                "amount_mean": 180.0,
+                "amount_std_dev": 25.0,
+                "qty_mean": 3.0,
+                "qty_std_dev": 0.4,
+                "unit": "kg"
+              },
+              "credit": {
+                "account": "Cash",
+                "amount_mean": 180.0,
+                "amount_std_dev": 25.0
+              },
+              "confidence": 0.82,
+              "currency": "INR",
+              "event_ids": [
+                "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+                "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+              ],
+              "logical_clock": 43,
+              "device_id": "device-a",
+              "business_date": "2026-10-25",
+              "created_at": "2026-10-25T09:16:20+05:30",
+              "clock_suspect": true
+            },
+            {
+              "transaction_id": "1f2e3d4c-5b6a-4978-8a9b-0c1d2e3f4a5b",
+              "status": "pending",
+              "debit": {
+                "account": "Inventory:Onions",
+                "amount_mean": 40.0,
+                "amount_std_dev": 6.0,
+                "qty_mean": 1.0,
+                "qty_std_dev": 0.15,
+                "unit": "kg"
+              },
+              "credit": {
+                "account": "Cash",
+                "amount_mean": 40.0,
+                "amount_std_dev": 6.0
+              },
+              "confidence": 0.4,
+              "currency": "INR",
+              "event_ids": [
+                "2a3b4c5d-6e7f-4a8b-9c0d-1e2f3a4b5c6d"
+              ],
+              "logical_clock": 45,
+              "device_id": "device-b",
+              "created_at": "1970-01-01T00:00:00+05:30",
+              "clock_suspect": true,
+              "notes": "Simulated hostile-clock sync probe; not a real purchase."
+            }
+          ]
+        }
+      ]
+    },
+
+    "EntryExplanation": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Entry Explanation (auditable fusion receipt)",
+      "description": "Human- and machine-readable explanation of one ledger entry. Shows the stored value, the evidence lines, the price-agreement verdict, the exact uncertainty adjustment, and per-source counterfactual ranges from the reproducible Monte Carlo run.",
+      "required": [
+        "transaction_id",
+        "status",
+        "amount_mean",
+        "amount_std_dev",
+        "confidence",
+        "sources",
+        "agreement",
+        "per_source_ranges",
+        "canonical_fallback",
+        "simulated_amount_mean",
+        "simulated_amount_std_dev",
+        "simulated_confidence",
+        "evidence_event_ids",
+        "narrative"
+      ],
+      "properties": {
+        "transaction_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "fused", "posted", "voided"]
+        },
+        "amount_mean": {
+          "type": "number"
+        },
+        "amount_std_dev": {
+          "type": "number",
+          "minimum": 0
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "event_id",
+              "source",
+              "device_id",
+              "confidence",
+              "wall_clock",
+              "clock_suspect",
+              "logical_clock",
+              "item",
+              "qty",
+              "unit",
+              "price",
+              "unit_price"
+            ],
+            "properties": {
+              "event_id": { "type": "string", "format": "uuid" },
+              "source": {
+                "type": "string",
+                "enum": ["audio", "ocr", "sms", "manual"]
+              },
+              "device_id": { "type": "string" },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "wall_clock": { "type": "string", "format": "date-time" },
+              "clock_suspect": { "type": "boolean" },
+              "logical_clock": { "type": "integer", "minimum": 0 },
+              "item": { "type": "string" },
+              "qty": { "type": "number" },
+              "unit": { "type": "string" },
+              "price": { "type": ["number", "null"] },
+              "unit_price": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "agreement": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "verdict",
+            "price_spread_pct",
+            "std_multiplier",
+            "confidence_adjustment",
+            "mean_source_confidence",
+            "method"
+          ],
+          "properties": {
+            "verdict": {
+              "type": "string",
+              "enum": ["agree", "disagree", "single_source"]
+            },
+            "price_spread_pct": { "type": "number", "minimum": 0 },
+            "std_multiplier": { "type": "number", "minimum": 0 },
+            "confidence_adjustment": { "type": "number" },
+            "mean_source_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "method": { "type": "string" }
+          }
+        },
+        "per_source_ranges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["event_id", "source", "amount_mean", "amount_std_dev"],
+            "properties": {
+              "event_id": { "type": "string", "format": "uuid" },
+              "source": {
+                "type": "string",
+                "enum": ["audio", "ocr", "sms", "manual"]
+              },
+              "amount_mean": { "type": "number" },
+              "amount_std_dev": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "canonical_fallback": { "type": "boolean" },
+        "simulated_amount_mean": { "type": "number" },
+        "simulated_amount_std_dev": { "type": "number", "minimum": 0 },
+        "simulated_confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence_event_ids": {
+          "type": "array",
+          "items": { "type": "string", "format": "uuid" }
+        },
+        "narrative": { "type": "string", "maxLength": 1500 }
+      },
+      "examples": [
+        {
+          "transaction_id": "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
+          "status": "fused",
+          "amount_mean": 180.0,
+          "amount_std_dev": 25.0,
+          "confidence": 0.82,
+          "sources": [
+            {
+              "event_id": "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+              "source": "audio",
+              "device_id": "device-a",
+              "confidence": 0.85,
+              "wall_clock": "2026-10-25T09:14:00+05:30",
+              "clock_suspect": false,
+              "logical_clock": 42,
+              "item": "tamatar",
+              "qty": 3.0,
+              "unit": "kilo",
+              "price": 180.0,
+              "unit_price": 60.0
+            },
+            {
+              "event_id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+              "source": "ocr",
+              "device_id": "device-b",
+              "confidence": 0.62,
+              "wall_clock": "1970-01-01T00:00:00+05:30",
+              "clock_suspect": true,
+              "logical_clock": 17,
+              "item": "tomato",
+              "qty": 3.0,
+              "unit": "kg",
+              "price": 180.0,
+              "unit_price": 60.0
+            }
+          ],
+          "agreement": {
+            "verdict": "agree",
+            "price_spread_pct": 0.0,
+            "std_multiplier": 0.85,
+            "confidence_adjustment": 0.01,
+            "mean_source_confidence": 0.735,
+            "method": "relative unit-price spread; 15% agreement threshold"
+          },
+          "per_source_ranges": [
+            {
+              "event_id": "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+              "source": "audio",
+              "amount_mean": 180.0,
+              "amount_std_dev": 34.64
+            },
+            {
+              "event_id": "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+              "source": "ocr",
+              "amount_mean": 180.0,
+              "amount_std_dev": 34.64
+            }
+          ],
+          "canonical_fallback": true,
+          "simulated_amount_mean": 180.0,
+          "simulated_amount_std_dev": 29.44,
+          "simulated_confidence": 0.74,
+          "evidence_event_ids": [
+            "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+            "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d"
+          ],
+          "narrative": "Audio and OCR agree on Rs 180. The two-source fusion applies a 15% range discount. The OCR wall clock reads 1970, so it is used as evidence but ignored for ordering. This canonical entry is pinned to the demo seed; the live simulation produces approximately Rs 180 +/- Rs 29.44."
+        }
+      ]
+    },
+
+    "DailyTruth": {
+      "type": "object",
+      "additionalProperties": false,
+      "title": "Daily Truth (ghost inventory + profit autopsy)",
+      "description": "One-screen reconciliation of physical stock against purchases and recipe consumption, combined with the live loss split and the accrual-profit waterfall. The ledger_fingerprint is a SHA-256 over the canonically serialized, logically sorted ledger.",
+      "required": [
+        "business_date",
+        "profit",
+        "loss_components",
+        "reconciliation",
+        "waterfall",
+        "evidence_summary",
+        "actions",
+        "narrative",
+        "ledger_fingerprint"
+      ],
+      "properties": {
+        "business_date": { "type": "string", "format": "date" },
+        "profit": { "$ref": "#/$defs/ProfitSummary" },
+        "loss_components": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": { "$ref": "#/$defs/LossComponent" }
+        },
+        "reconciliation": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "item",
+            "unit",
+            "purchased_qty",
+            "consumed_qty",
+            "expected_on_hand_qty",
+            "counted_qty",
+            "missing_qty",
+            "unit_cost",
+            "missing_value",
+            "modeled_loss_qty_mean",
+            "modeled_loss_qty_std_dev",
+            "modeled_loss_value_mean",
+            "modeled_loss_value_std_dev",
+            "consistent_within_1_sigma",
+            "evidence_event_ids",
+            "method"
+          ],
+          "properties": {
+            "item": { "type": "string" },
+            "unit": { "type": "string" },
+            "purchased_qty": { "type": "number", "minimum": 0 },
+            "consumed_qty": { "type": "number", "minimum": 0 },
+            "expected_on_hand_qty": { "type": "number", "minimum": 0 },
+            "counted_qty": { "type": "number", "minimum": 0 },
+            "missing_qty": { "type": "number", "minimum": 0 },
+            "unit_cost": { "type": "number", "minimum": 0 },
+            "missing_value": { "type": "number", "minimum": 0 },
+            "modeled_loss_qty_mean": { "type": "number", "minimum": 0 },
+            "modeled_loss_qty_std_dev": { "type": "number", "minimum": 0 },
+            "modeled_loss_value_mean": { "type": "number", "minimum": 0 },
+            "modeled_loss_value_std_dev": { "type": "number", "minimum": 0 },
+            "consistent_within_1_sigma": { "type": "boolean" },
+            "evidence_event_ids": {
+              "type": "array",
+              "items": { "type": "string", "format": "uuid" }
+            },
+            "method": { "type": "string" }
+          }
+        },
+        "waterfall": {
+          "type": "array",
+          "minItems": 4,
+          "maxItems": 4,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["label", "amount_mean", "amount_std_dev"],
+            "properties": {
+              "label": { "type": "string" },
+              "amount_mean": { "type": "number" },
+              "amount_std_dev": { "type": "number", "minimum": 0 }
+            }
+          }
+        },
+        "evidence_summary": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "total_events",
+            "fused_entries",
+            "single_source_entries",
+            "average_confidence",
+            "suspect_clock_events",
+            "hostile_clock_recoveries",
+            "source_mix"
+          ],
+          "properties": {
+            "total_events": { "type": "integer", "minimum": 0 },
+            "fused_entries": { "type": "integer", "minimum": 0 },
+            "single_source_entries": { "type": "integer", "minimum": 0 },
+            "average_confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "suspect_clock_events": { "type": "integer", "minimum": 0 },
+            "hostile_clock_recoveries": { "type": "integer", "minimum": 0 },
+            "source_mix": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["audio", "ocr", "sms", "manual"],
+              "properties": {
+                "audio": { "type": "integer", "minimum": 0 },
+                "ocr": { "type": "integer", "minimum": 0 },
+                "sms": { "type": "integer", "minimum": 0 },
+                "manual": { "type": "integer", "minimum": 0 }
+              }
+            }
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "narrative": { "type": "string", "maxLength": 1500 },
+        "ledger_fingerprint": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "examples": [
+        {
+          "business_date": "2026-10-25",
+          "profit": {
+            "revenue_mean": 2400.0,
+            "revenue_std_dev": 160.0,
+            "cogs_mean": 1146.0,
+            "cogs_std_dev": 80.0,
+            "loss_mean": 54.0,
+            "loss_std_dev": 15.0,
+            "profit_mean": 1200.0,
+            "profit_std_dev": 179.51,
+            "time_period": "2026-10-25"
+          },
+          "loss_components": [
+            {
+              "cause": "spoilage",
+              "share_mean": 0.55,
+              "share_std_dev": 0.078,
+              "driver": "34C heat and 9h unrefrigerated; tomatoes lose about 8% per day."
+            },
+            {
+              "cause": "theft",
+              "share_mean": 0.2,
+              "share_std_dev": 0.063,
+              "driver": "4 fewer plate-sales than expected, yet no stock remained on hand."
+            },
+            {
+              "cause": "personal_consumption",
+              "share_mean": 0.25,
+              "share_std_dev": 0.068,
+              "driver": "Household meals draw from the same tomato stock."
+            }
+          ],
+          "reconciliation": {
+            "item": "Tomatoes",
+            "unit": "kg",
+            "purchased_qty": 3.0,
+            "consumed_qty": 0.105,
+            "expected_on_hand_qty": 2.895,
+            "counted_qty": 2.1,
+            "missing_qty": 0.795,
+            "unit_cost": 60.0,
+            "missing_value": 47.7,
+            "modeled_loss_qty_mean": 0.9,
+            "modeled_loss_qty_std_dev": 0.25,
+            "modeled_loss_value_mean": 54.0,
+            "modeled_loss_value_std_dev": 15.0,
+            "consistent_within_1_sigma": true,
+            "evidence_event_ids": [
+              "3f1b9c2e-5a4d-4f7a-8b6e-1c2d3e4f5a6b",
+              "9a8b7c6d-5e4f-4a3b-9c2d-1e0f9a8b7c6d",
+              "7c6b5a4d-3e2f-4a1b-9c8d-7e6f5a4b3c2d",
+              "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+            ],
+            "method": "purchases minus recipe consumption vs physical stock count"
+          },
+          "waterfall": [
+            {
+              "label": "Revenue",
+              "amount_mean": 2400.0,
+              "amount_std_dev": 160.0
+            },
+            {
+              "label": "Less: COGS",
+              "amount_mean": -1146.0,
+              "amount_std_dev": 80.0
+            },
+            {
+              "label": "Less: hidden loss",
+              "amount_mean": -54.0,
+              "amount_std_dev": 15.0
+            },
+            {
+              "label": "True profit",
+              "amount_mean": 1200.0,
+              "amount_std_dev": 179.51
+            }
+          ],
+          "evidence_summary": {
+            "total_events": 7,
+            "fused_entries": 1,
+            "single_source_entries": 2,
+            "average_confidence": 0.883,
+            "suspect_clock_events": 1,
+            "hostile_clock_recoveries": 0,
+            "source_mix": {
+              "audio": 2,
+              "ocr": 1,
+              "sms": 2,
+              "manual": 2
+            }
+          },
+          "actions": [
+            "Keep tomatoes shaded: spoilage is about 55% of the modelled loss.",
+            "Confirm about 0.23 kg of household use with the family.",
+            "The physical gap is within 1 sigma of the model; no large theft signal."
+          ],
+          "narrative": "You bought 3.0 kg of tomatoes and 7 poha plates use 0.105 kg by recipe. Expected on hand is 2.895 kg, but 2.1 kg was counted, so 0.795 kg (Rs 47.7) is missing. The model expects 0.9 +/- 0.25 kg, so the count is consistent. True profit after hidden loss is Rs 1200 +/- Rs 179.51.",
+          "ledger_fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    }
+  }
+}
