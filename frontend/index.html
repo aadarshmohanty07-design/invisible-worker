@@ -2,186 +2,135 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="color-scheme" content="light">
-  <title>Invisible Worker — Daily Truth</title>
-  <meta name="description" content="Offline-first probabilistic ledger for street vendors. Every number has a range and a receipt.">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f4f6f4">
+  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0d100f">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="description" content="Offline-first probabilistic ledger for street vendors. Every amount carries a confidence range and its source evidence.">
+  <title>Invisible Worker</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" type="image/png" href="icons/icon-512.png">
+  <link rel="apple-touch-icon" href="icons/icon-512.png">
+  <script>
+    (function () {
+      try {
+        var stored = localStorage.getItem("iw-theme");
+        var theme = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+        document.documentElement.dataset.theme = theme;
+      } catch (error) { document.documentElement.dataset.theme = "light"; }
+    })();
+  </script>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to content</a>
-
-  <header class="topbar">
-    <div class="brand">
-      <span class="brand-mark" aria-hidden="true">
+  <div class="app" id="app">
+    <div class="splash" id="splash" aria-hidden="true">
+      <div class="splash__mark">
         <svg viewBox="0 0 40 40" role="img" focusable="false">
           <path d="M8 11.5 20 5l12 6.5v17L20 35 8 28.5z" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round"/>
           <path d="M13 16h14M13 21h14M13 26h9" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
         </svg>
-      </span>
-      <div>
-        <h1>Invisible Worker</h1>
-        <p>Offline-first probabilistic ledger</p>
       </div>
-    </div>
-    <div class="topbar__actions">
-      <span class="status status--idle" id="api-status" role="status">
-        <span class="status__dot"></span>
-        <span id="api-status-text">Connecting</span>
-      </span>
-      <button class="btn btn--ghost" id="refresh-btn" type="button">Refresh</button>
-      <button class="btn btn--outline" id="reset-btn-top" type="button" data-action="reset">Reset demo</button>
-    </div>
-  </header>
-
-  <main class="shell" id="main">
-    <div class="banner" id="error-banner" role="alert" hidden>
-      <div><strong>API unavailable.</strong> <span id="error-text">Check that the server is running and the API base is correct.</span></div>
-      <button class="btn btn--small btn--ghost" id="retry-btn" type="button">Retry</button>
+      <p class="splash__name">Invisible Worker</p>
+      <p class="splash__tag">Offline-first probabilistic ledger</p>
+      <span class="splash__loader" aria-hidden="true"></span>
     </div>
 
-    <section class="intro" aria-labelledby="intro-title">
-      <div>
-        <p class="eyebrow">CASCADE '26 · Theme 1 · Problem 2</p>
-        <h2 id="intro-title">The shopkeeper's notebook, with receipts.</h2>
-        <p class="intro__copy">Noisy evidence becomes a balanced ledger with honest ranges. Three phones merge without double-counting, and a 1970 clock cannot rewrite history.</p>
-      </div>
-      <div class="intro__meta">
-        <span class="pill" id="business-date">Loading day…</span>
-        <span class="pill" id="health-version">API —</span>
-      </div>
-    </section>
-
-    <section class="hero-grid" aria-label="Today at a glance">
-      <article class="card card--profit" id="profit-card">
-        <div class="skeleton skeleton--line"></div>
-        <div class="skeleton skeleton--big"></div>
-        <div class="skeleton skeleton--line"></div>
-        <div class="skeleton skeleton--line short"></div>
-      </article>
-
-      <article class="card card--shot" id="money-shot-card">
-        <div class="skeleton skeleton--line"></div>
-        <div class="skeleton skeleton--big"></div>
-        <div class="skeleton skeleton--line"></div>
-      </article>
-
-      <article class="card card--ghost" id="ghost-card">
-        <div class="skeleton skeleton--line"></div>
-        <div class="skeleton skeleton--big"></div>
-        <div class="skeleton skeleton--line"></div>
-      </article>
-    </section>
-
-    <section class="section" id="controls" aria-labelledby="controls-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Demo controls</p>
-          <h2 id="controls-title">Rehearse the story</h2>
+    <header class="appbar">
+      <div class="appbar__brand">
+        <span class="appbar__mark" aria-hidden="true">
+          <svg viewBox="0 0 40 40" role="img" focusable="false">
+            <path d="M8 11.5 20 5l12 6.5v17L20 35 8 28.5z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+            <path d="M13 16h14M13 21h14M13 26h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div class="appbar__titles">
+          <h1>Invisible Worker</h1>
+          <p id="appbar-sub">Today's numbers</p>
         </div>
-        <p class="section__hint">Reset before Sync to replay the seeded three-conflict merge.</p>
       </div>
-      <div class="control-grid" id="control-grid">
-        <button class="control" type="button" data-action="money-shot">
-          <span class="control__title">Money shot</span>
-          <span class="control__copy">Fuse the seeded audio + OCR pair and open its Trust Receipt.</span>
-        </button>
-        <button class="control" type="button" data-action="noisy">
-          <span class="control__title">Noisy quotes</span>
-          <span class="control__copy">Run a clean tight-vs-noisy comparison and show the range widening.</span>
-        </button>
-        <button class="control" type="button" data-action="pending-pair">
-          <span class="control__title">Pending pair</span>
-          <span class="control__copy">Fuse the two pending market events through the real Monte Carlo path.</span>
-        </button>
-        <button class="control" type="button" data-action="sync">
-          <span class="control__title">Sync phones</span>
-          <span class="control__copy">Merge device-a, device-b and device-c and derive the conflict log.</span>
-        </button>
-        <button class="control" type="button" data-action="clock">
-          <span class="control__title">1970 clock</span>
-          <span class="control__copy">Append a hostile-clock probe and prove history is preserved.</span>
-        </button>
-        <button class="control control--reset" type="button" data-action="reset">
-          <span class="control__title">Reset demo</span>
-          <span class="control__copy">Restore the seed ledger and re-arm the CRDT replicas.</span>
+      <div class="appbar__actions">
+        <span class="status status--idle" id="api-status" role="status">
+          <span class="status__dot"></span>
+          <span id="api-status-text">Connecting</span>
+        </span>
+        <button class="iconbtn" id="refresh-btn" type="button" aria-label="Refresh">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
         </button>
       </div>
-      <div class="scenario-result" id="scenario-result" hidden aria-live="polite"></div>
-    </section>
+    </header>
 
-    <section class="section" id="daily" aria-labelledby="daily-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Profit autopsy</p>
-          <h2 id="daily-title">Where the money went</h2>
-        </div>
-        <p class="section__hint" id="daily-hint">Live from /truth/daily</p>
+    <main id="main">
+      <div class="banner" id="error-banner" role="alert" hidden>
+        <div><strong>API unavailable.</strong> <span id="error-text">Check that the server is running and the API base is correct.</span></div>
+        <button class="btn btn--small btn--ghost" id="retry-btn" type="button">Retry</button>
       </div>
-      <div class="split-grid">
+
+      <section class="page" id="page-today" data-page="today">
+        <div class="date-row">
+          <span class="pill pill--tonal" id="business-date">Loading day…</span>
+          <span class="pill pill--quiet" id="health-version">API —</span>
+        </div>
+
+        <article class="card card--hero" id="profit-card">
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--big"></div>
+          <div class="skeleton skeleton--line"></div>
+        </article>
+
+        <article class="card" id="money-shot-card">
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--big"></div>
+          <div class="skeleton skeleton--line"></div>
+        </article>
+
+        <article class="card" id="ghost-card">
+          <div class="skeleton skeleton--line"></div>
+          <div class="skeleton skeleton--big"></div>
+          <div class="skeleton skeleton--line"></div>
+        </article>
+
         <article class="card" id="waterfall-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
+
         <article class="card" id="loss-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
+        </article>
+
+        <article class="card" id="evidence-card">
+          <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
-      </div>
-      <article class="card evidence-card" id="evidence-card">
-        <div class="skeleton skeleton--line"></div>
-        <div class="skeleton skeleton--line"></div>
-      </article>
-    </section>
+      </section>
 
-    <section class="section" id="ledger-section" aria-labelledby="ledger-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Ledger</p>
-          <h2 id="ledger-title">Every entry has a receipt</h2>
+      <section class="page" id="page-ledger" data-page="ledger" hidden>
+        <div class="chip-row" id="ledger-filters" role="tablist" aria-label="Ledger filters">
+          <button class="chip is-active" type="button" data-filter="all">All</button>
+          <button class="chip" type="button" data-filter="fused">Fused</button>
+          <button class="chip" type="button" data-filter="pending">Pending</button>
+          <button class="chip" type="button" data-filter="suspect">1970 clock</button>
         </div>
-        <p class="section__hint">Sorted by logical clock, never wall clock.</p>
-      </div>
-      <div class="table-wrap card">
-        <table>
-          <caption class="sr-only">Ledger entries</caption>
-          <thead>
-            <tr>
-              <th scope="col">Clock</th>
-              <th scope="col">Status</th>
-              <th scope="col">Accounts</th>
-              <th scope="col">Amount</th>
-              <th scope="col">Confidence</th>
-              <th scope="col">Evidence</th>
-              <th scope="col"><span class="sr-only">Action</span></th>
-            </tr>
-          </thead>
-          <tbody id="ledger-body">
-            <tr><td colspan="7" class="table-empty">Loading ledger…</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </section>
+        <div class="entry-list" id="ledger-list"></div>
+      </section>
 
-    <section class="section" id="sync-section" aria-labelledby="sync-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Family sync</p>
-          <h2 id="sync-title">Three phones, one ledger</h2>
+      <section class="page" id="page-sync" data-page="sync" hidden>
+        <p class="page-hint" id="sync-hint">Reset before Sync to replay the seeded three-conflict merge.</p>
+        <div class="device-grid" id="device-grid">
+          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
+          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
+          <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
         </div>
         <div class="button-row">
           <button class="btn btn--primary" type="button" data-action="sync">Sync devices</button>
           <button class="btn btn--danger-outline" type="button" data-action="clock">Simulate 1970 clock</button>
         </div>
-      </div>
-      <div class="device-grid" id="device-grid">
-        <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-        <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-        <div class="card"><div class="skeleton skeleton--line"></div><div class="skeleton skeleton--line short"></div></div>
-      </div>
-      <div class="split-grid">
         <article class="card" id="merge-log-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
@@ -190,108 +139,188 @@
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
-      </div>
-      <article class="card order-card" id="order-card">
-        <div class="card__head">
-          <h3>Logical order proof</h3>
-          <span class="muted">GET /ledger</span>
-        </div>
-        <div class="order-pills" id="ledger-order"></div>
-        <p class="proof" id="probe-proof">Loading ledger order…</p>
-      </article>
-    </section>
+        <article class="card order-card" id="order-card">
+          <div class="card__head">
+            <h3>Logical order proof</h3>
+            <span class="muted">GET /ledger</span>
+          </div>
+          <div class="order-pills" id="ledger-order"></div>
+          <p class="proof" id="probe-proof">Loading ledger order…</p>
+        </article>
+      </section>
 
-    <section class="section" id="events-section" aria-labelledby="events-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Raw evidence</p>
-          <h2 id="events-title">What the phones heard and saw</h2>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="pending-toggle">
-          Pending only
-        </label>
-      </div>
-      <div class="table-wrap card">
-        <table>
-          <caption class="sr-only">Raw events</caption>
-          <thead>
-            <tr>
-              <th scope="col">Source</th>
-              <th scope="col">Evidence</th>
-              <th scope="col">Logical</th>
-              <th scope="col">Wall clock</th>
-              <th scope="col">State</th>
-            </tr>
-          </thead>
-          <tbody id="events-body">
-            <tr><td colspan="5" class="table-empty">Loading evidence…</td></tr>
-          </tbody>
-        </table>
-      </div>
-      <article class="card" id="seed-card">
-        <div class="card__head">
-          <h3>Demo IDs for the frontend</h3>
-          <span class="muted">Stable seed identifiers</span>
-        </div>
-        <div class="seed-list" id="seed-list"></div>
-      </article>
-    </section>
+      <section class="page" id="page-more" data-page="more" hidden>
+        <article class="card card--scenarios">
+          <div class="card__head">
+            <div><h3>Demo scenarios</h3></div>
+          </div>
+          <div class="scenario-list">
+            <button class="scenario" type="button" data-action="money-shot">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">Money shot</span><span class="scenario__copy">Fuse the seeded audio + OCR pair and open its Trust Receipt.</span></span>
+            </button>
+            <button class="scenario" type="button" data-action="noisy">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">Noisy quotes</span><span class="scenario__copy">Show the range widening when suppliers disagree.</span></span>
+            </button>
+            <button class="scenario" type="button" data-action="pending-pair">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">Pending pair</span><span class="scenario__copy">Fuse two pending events with the Monte Carlo path.</span></span>
+            </button>
+            <button class="scenario" type="button" data-action="sync">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">Sync phones</span><span class="scenario__copy">Merge three devices and derive the conflict log.</span></span>
+            </button>
+            <button class="scenario" type="button" data-action="clock">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">1970 clock</span><span class="scenario__copy">Append a hostile-clock probe and prove history survives.</span></span>
+            </button>
+            <button class="scenario scenario--danger" type="button" data-action="reset">
+              <span class="scenario__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+              <span class="scenario__text"><span class="scenario__title">Reset demo</span><span class="scenario__copy">Restore the seed ledger and re-arm the CRDT replicas.</span></span>
+            </button>
+          </div>
+          <div class="scenario-result" id="scenario-result" hidden aria-live="polite"></div>
+        </article>
 
-    <section class="section" id="extras-section" aria-labelledby="extras-title">
-      <div class="section__head">
-        <div>
-          <p class="eyebrow">Ledger extras</p>
-          <h2 id="extras-title">Credit and recipes</h2>
-        </div>
-      </div>
-      <div class="split-grid">
         <article class="card" id="credits-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
+
         <article class="card" id="recipes-card">
           <div class="skeleton skeleton--line"></div>
           <div class="skeleton skeleton--line"></div>
         </article>
-      </div>
-    </section>
 
-    <section class="section" id="api-section" aria-labelledby="api-title">
-      <article class="card api-card">
-        <div class="card__head">
-          <h3 id="api-title">API connection</h3>
-          <span class="muted">Works over LAN, no cloud</span>
+        <article class="card">
+          <div class="card__head">
+            <div><h3>Raw events</h3></div>
+            <label class="switch">
+              <input type="checkbox" id="pending-toggle">
+              <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+              <span class="switch__label">Pending only</span>
+            </label>
+          </div>
+          <div class="event-list" id="events-body"></div>
+        </article>
+
+        <article class="card" id="seed-card">
+          <div class="card__head">
+            <h3>Demo IDs</h3>
+            <span class="muted">Stable seed identifiers</span>
+          </div>
+          <div class="seed-list" id="seed-list"></div>
+        </article>
+
+        <article class="card api-card">
+          <div class="card__head">
+            <div><h3>API connection</h3></div>
+            <span class="muted">Works over LAN, no cloud</span>
+          </div>
+          <form class="api-form" id="api-form">
+            <label for="api-base">API base</label>
+            <input id="api-base" name="api" type="url" placeholder="http://192.168.1.100:8000" autocomplete="off" spellcheck="false">
+            <button class="btn btn--primary" type="submit">Connect</button>
+          </form>
+          <div class="setting-row">
+            <span class="setting-row__text"><strong>Dark theme</strong><span>Follows system until you change it</span></span>
+            <label class="switch">
+              <input type="checkbox" id="theme-toggle" role="switch" aria-label="Dark theme">
+              <span class="switch__track" aria-hidden="true"><span class="switch__thumb"></span></span>
+            </label>
+          </div>
+          <p class="muted">Response contracts live in <code>schemas.json</code>. Open <a id="docs-link" href="/docs">/docs</a> for Swagger or <a id="openapi-link" href="/openapi.json">/openapi.json</a> for endpoint paths.</p>
+        </article>
+
+        <p class="colophon">Invisible Worker · CASCADE '26 · Theme 1 · Problem 2<br>Probabilistic ledger, CRDT sync, hostile-clock defence.</p>
+      </section>
+    </main>
+
+    <button class="fab" id="fab" type="button" aria-label="Quick actions" aria-haspopup="dialog">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+    </button>
+
+    <nav class="bottomnav" aria-label="Main">
+      <button class="bottomnav__item is-active" type="button" data-tab="today">
+        <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9.5 12 2l9 7.5V20a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 20z"/><path d="M9 21.5v-9h6v9"/></svg></span>
+        <span class="bottomnav__label">Today</span>
+      </button>
+      <button class="bottomnav__item" type="button" data-tab="ledger">
+        <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg></span>
+        <span class="bottomnav__label">Ledger</span>
+      </button>
+      <button class="bottomnav__item" type="button" data-tab="sync">
+        <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
+        <span class="bottomnav__label">Sync</span>
+      </button>
+      <button class="bottomnav__item" type="button" data-tab="more">
+        <span class="bottomnav__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="12" cy="5" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="12" cy="19" r="1.7"/></svg></span>
+        <span class="bottomnav__label">More</span>
+      </button>
+    </nav>
+
+    <div class="sheet" id="receipt-sheet" hidden>
+      <div class="sheet__backdrop" data-close-modal></div>
+      <div class="sheet__panel" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
+        <div class="sheet__grab" data-close-modal aria-hidden="true"><span></span></div>
+        <div class="sheet__head">
+          <div>
+            <p class="eyebrow">Trust Receipt</p>
+            <h2 id="receipt-title">Evidence explanation</h2>
+          </div>
+          <button class="iconbtn" type="button" data-close-modal aria-label="Close receipt">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
         </div>
-        <form class="api-form" id="api-form">
-          <label for="api-base">API base</label>
-          <input id="api-base" name="api" type="url" placeholder="http://192.168.1.100:8000" autocomplete="off" spellcheck="false">
-          <button class="btn btn--primary" type="submit">Connect</button>
-        </form>
-        <p class="muted">Same-origin by default. Open <a id="docs-link" href="/docs">/docs</a> for Swagger or <a id="openapi-link" href="/openapi.json">/openapi.json</a> for endpoint paths. Response contracts live in <code>schemas.json</code>. This panel is for rehearsal; the Flutter app consumes the same endpoints.</p>
-      </article>
-    </section>
-  </main>
-
-  <footer class="footer">
-    <span>Invisible Worker · CASCADE '26</span>
-    <span><a id="footer-docs-link" href="/docs">API docs</a> · <a id="footer-openapi-link" href="/openapi.json">OpenAPI</a></span>
-  </footer>
-
-  <div class="toasts" id="toasts" aria-live="polite" aria-atomic="false"></div>
-
-  <div class="modal" id="receipt-modal" hidden>
-    <div class="modal__backdrop" data-close-modal></div>
-    <div class="modal__dialog" role="dialog" aria-modal="true" aria-labelledby="receipt-title">
-      <div class="modal__header">
-        <div>
-          <p class="eyebrow">Trust Receipt</p>
-          <h2 id="receipt-title">Evidence explanation</h2>
-        </div>
-        <button class="btn btn--ghost" type="button" data-close-modal aria-label="Close receipt">Close</button>
+        <div class="sheet__body" id="receipt-body"></div>
       </div>
-      <div class="modal__body" id="receipt-body"></div>
     </div>
+
+    <div class="sheet" id="actions-sheet" hidden>
+      <div class="sheet__backdrop" data-close-sheet></div>
+      <div class="sheet__panel" role="dialog" aria-modal="true" aria-label="Quick actions">
+        <div class="sheet__grab" data-close-sheet aria-hidden="true"><span></span></div>
+        <div class="sheet__head">
+          <div>
+            <h2>Run the demo</h2>
+          </div>
+          <button class="iconbtn" type="button" data-close-sheet aria-label="Close quick actions">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" focusable="false"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="sheet__body">
+          <div class="qa-grid">
+            <button class="qa" type="button" data-action="money-shot">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></svg></span>
+              <span>Money shot</span>
+            </button>
+            <button class="qa" type="button" data-action="noisy">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
+              <span>Noisy quotes</span>
+            </button>
+            <button class="qa" type="button" data-action="pending-pair">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></svg></span>
+              <span>Pending pair</span>
+            </button>
+            <button class="qa" type="button" data-action="sync">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg></span>
+              <span>Sync phones</span>
+            </button>
+            <button class="qa" type="button" data-action="clock">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg></span>
+              <span>1970 clock</span>
+            </button>
+            <button class="qa qa--danger" type="button" data-action="reset">
+              <span class="qa__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></span>
+              <span>Reset demo</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="snackbar" id="toasts" aria-live="polite" aria-atomic="false"></div>
   </div>
 
   <script src="app.js" defer></script>

@@ -12,16 +12,26 @@
     canonicalTx: "b7e6d5c4-3a2f-4e1d-9c8b-7a6f5e4d3c2b",
   };
 
+  const TAB_SUBTITLES = {
+    today: "Today's numbers",
+    ledger: "All entries",
+    sync: "Devices and merge log",
+    more: "Scenarios, evidence, settings",
+  };
+
   const SOURCE_CLASSES = new Set(["audio", "ocr", "sms", "manual"]);
   const DEVICE_STATUSES = new Set(["online", "offline", "syncing"]);
   const LOSS_COLORS = {
-    spoilage: "#b87319",
-    theft: "#a63b32",
-    personal_consumption: "#2d5f8b",
+    spoilage: "var(--amber-ink)",
+    theft: "var(--red)",
+    personal_consumption: "var(--blue)",
   };
+  const LOSS_FALLBACK = "var(--faint)";
 
   const state = {
     apiBase: initialApiBase(),
+    tab: "today",
+    ledgerFilter: "all",
     health: null,
     ledger: [],
     events: [],
@@ -36,6 +46,7 @@
     lastScenario: null,
     pendingOnly: false,
     actionBusy: false,
+    firstRefreshDone: false,
   };
 
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -164,6 +175,8 @@
     return `<div class="empty-state">${esc(message)}</div>`;
   }
 
+  const CHEVRON = '<span class="entry__chevron" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg></span>';
+
   async function api(path, options = {}) {
     const { method = "GET", body, headers = {} } = options;
     const controller = new AbortController();
@@ -222,7 +235,8 @@
     item.className = `toast${type === "error" ? " toast--error" : ""}`;
     item.textContent = message;
     container.appendChild(item);
-    window.setTimeout(() => item.remove(), 4800);
+    while (container.children.length > 2) container.firstChild.remove();
+    window.setTimeout(() => item.remove(), 4200);
   }
 
   function setButtonBusy(button, busy) {
@@ -270,6 +284,50 @@
     }
   }
 
+  /* ---------- Tabs & sheets ---------- */
+
+  function switchTab(tab) {
+    if (!TAB_SUBTITLES[tab]) return;
+    state.tab = tab;
+    $$(".page").forEach((page) => {
+      page.hidden = page.dataset.page !== tab;
+    });
+    $$(".bottomnav__item").forEach((item) => {
+      item.classList.toggle("is-active", item.dataset.tab === tab);
+    });
+    $("#appbar-sub").textContent = TAB_SUBTITLES[tab];
+    $("#main").scrollTop = 0;
+  }
+
+  function openSheet(id) {
+    const sheet = $(id);
+    if (!sheet || !sheet.hidden) return;
+    sheet.hidden = false;
+    document.body.style.overflow = "hidden";
+  }
+
+  function closeSheet(id) {
+    const sheet = $(id);
+    if (!sheet || sheet.hidden) return;
+    sheet.hidden = true;
+    if ($("#receipt-sheet").hidden && $("#actions-sheet").hidden) {
+      document.body.style.overflow = "";
+    }
+  }
+
+  function closeAllSheets() {
+    closeSheet("#receipt-sheet");
+    closeSheet("#actions-sheet");
+  }
+
+  function hideSplash() {
+    const splash = $("#splash");
+    if (!splash || splash.classList.contains("is-hide")) return;
+    splash.classList.add("is-hide");
+    splash.setAttribute("aria-hidden", "true");
+    window.setTimeout(() => splash.remove(), 600);
+  }
+
   async function refreshAll({ quiet = false } = {}) {
     if (!quiet) setStatus("busy", "Refreshing");
     const requests = [
@@ -299,19 +357,26 @@
 
     const healthOk = Boolean(state.health);
     if (!healthOk) {
-      setStatus("error", "API offline");
+      setStatus("error", "Offline");
       const first = failures.find((failure) => failure.key === "health") || failures[0];
       showBanner(first?.error?.message || "The API could not be reached.");
     } else if (failures.length) {
-      setStatus("ok", "API online");
+      setStatus("ok", "Live");
       showBanner(`Some data could not load: ${failures[0].error.message}`);
     } else {
-      setStatus("ok", "API online");
+      setStatus("ok", "Live");
       hideBanner();
     }
 
     renderAll();
+
+    if (!state.firstRefreshDone) {
+      state.firstRefreshDone = true;
+      window.setTimeout(hideSplash, 450);
+    }
   }
+
+  /* ---------- Renderers ---------- */
 
   function renderAll() {
     renderStatus();
@@ -343,28 +408,45 @@
     const card = $("#profit-card");
     const summary = state.summary;
     if (!summary) {
-      card.innerHTML = emptyState("No profit summary loaded. Check the API connection.");
+      card.innerHTML = emptyState("No profit summary loaded. Check the API connection in More → Settings.");
       return;
     }
     const evidence = state.truth?.evidence_summary || {};
     const low = summary.profit_mean - summary.profit_std_dev;
     const high = summary.profit_mean + summary.profit_std_dev;
+    const avgConf = Number(evidence.average_confidence);
+    const circumference = 2 * Math.PI * 20;
+    const offset = Number.isFinite(avgConf)
+      ? circumference * (1 - Math.max(0, Math.min(1, avgConf)))
+      : circumference;
+    const fused = evidence.fused_entries ?? "—";
+    const suspect = evidence.suspect_clock_events ?? "—";
     card.innerHTML = `
-      <div class="card__head">
-        <span class="tag">True profit</span>
-        <span class="muted">${esc(summary.time_period)}</span>
+      <div class="hero-top">
+        <div>
+          <p class="eyebrow">True profit · ${esc(summary.time_period)}</p>
+          <p class="hero-amount">${money(summary.profit_mean)}</p>
+          <p class="hero-sub">± ${money(summary.profit_std_dev)} one-sigma band</p>
+        </div>
+        <div class="conf-ring">
+          <svg width="56" height="56" viewBox="0 0 48 48" aria-hidden="true">
+            <circle class="conf-ring__track" cx="24" cy="24" r="20" fill="none" stroke-width="5"></circle>
+            <circle class="conf-ring__fill" cx="24" cy="24" r="20" fill="none" stroke-width="5" stroke-linecap="round"
+              stroke-dasharray="${circumference.toFixed(2)}" stroke-dashoffset="${offset.toFixed(2)}"
+              transform="rotate(-90 24 24)"></circle>
+          </svg>
+          <div class="conf-ring__label">${Number.isFinite(avgConf) ? pct(avgConf, 0) : "—"} sure</div>
+        </div>
       </div>
-      <p class="big-number">${money(summary.profit_mean)}</p>
-      <div class="sub-number">± ${money(summary.profit_std_dev)} <span>1σ band</span></div>
       <div class="range-bar" aria-hidden="true"><span class="range-bar__fill" style="left:15%;width:70%"></span></div>
       <div class="range-labels"><span>${money(low)}</span><span>${money(high)}</span></div>
       <dl class="mini-grid">
         <div><dt>Revenue</dt><dd>${money(summary.revenue_mean)} <span>± ${money(summary.revenue_std_dev)}</span></dd></div>
         <div><dt>COGS</dt><dd>${money(summary.cogs_mean)} <span>± ${money(summary.cogs_std_dev)}</span></dd></div>
         <div><dt>Hidden loss</dt><dd>${money(summary.loss_mean)} <span>± ${money(summary.loss_std_dev)}</span></dd></div>
-        <div><dt>Evidence</dt><dd>${esc(evidence.fused_entries ?? "—")} fused <span>· ${esc(evidence.suspect_clock_events ?? "—")} suspect</span></dd></div>
+        <div><dt>Evidence</dt><dd>${esc(fused)} fused <span>· ${esc(suspect)} suspect</span></dd></div>
       </dl>
-      <p class="faint" style="margin-top:1rem">Profit = revenue − COGS − hidden loss. Each term carries its own uncertainty.</p>
+      <p class="hero-foot">Profit = revenue − COGS − hidden loss. Each term carries its own uncertainty.</p>
     `;
   }
 
@@ -373,7 +455,7 @@
     const entry = findLedger(SEED.canonicalTx);
     if (!entry) {
       card.innerHTML = `${emptyState("The canonical tomato entry is missing. Reset the demo to restore it.")}
-        <div class="button-row" style="margin-top:.8rem"><button class="btn btn--primary" type="button" data-action="reset">Reset demo</button></div>`;
+        <div class="button-row"><button class="btn btn--primary" type="button" data-action="reset">Reset demo</button></div>`;
       return;
     }
     const sourceEvents = entry.event_ids.map(findEvent).filter(Boolean);
@@ -382,19 +464,19 @@
     `).join("");
     card.innerHTML = `
       <div class="card__head">
-        <div><p class="eyebrow">The money shot</p><h3>Fused tomato purchase</h3></div>
+        <div><p class="eyebrow">Money shot</p><h3>Fused tomato purchase</h3></div>
         ${entry.clock_suspect ? '<span class="tag tag--red">1970 clock</span>' : ""}
       </div>
       <p class="shot-amount">${money(entry.debit.amount_mean)}</p>
       <div class="sub-number">± ${money(entry.debit.amount_std_dev)} <span>1σ</span></div>
       <p class="shot-account">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</p>
       <div class="evidence-chips">${chips || '<span class="chip">Evidence attached</span>'}</div>
-      <div class="card__head" style="margin:1rem 0 .2rem">
-        <span class="muted">Confidence ${pct(entry.confidence, 0)}</span>
-        <span class="muted">${entry.event_ids.length} evidence lines</span>
+      <div class="entry__meter">
+        <span class="muted">${pct(entry.confidence, 0)} confident</span>
+        <div class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></div>
+        <span class="muted">${entry.event_ids.length} lines</span>
       </div>
-      <div class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></div>
-      <div class="button-row" style="margin-top:1rem">
+      <div class="button-row">
         <button class="btn btn--primary" type="button" data-explain="${esc(entry.transaction_id)}">Open Trust Receipt</button>
         <button class="btn btn--ghost" type="button" data-action="money-shot">Re-run fusion</button>
       </div>
@@ -415,8 +497,8 @@
     const consistent = Boolean(reconciliation.consistent_within_1_sigma);
     card.innerHTML = `
       <div class="card__head">
-        <span class="tag tag--amber">Ghost inventory</span>
-        <span class="muted">${esc(reconciliation.item)}</span>
+        <div><p class="eyebrow">Ghost inventory</p><h3>Counted vs expected stock</h3></div>
+        <span class="tag tag--amber">${esc(reconciliation.item)}</span>
       </div>
       <div class="ghost-number">${num(reconciliation.missing_qty, 3)} kg <small>≈ ${money(reconciliation.missing_value)}</small></div>
       <div class="stock-bar" aria-hidden="true">
@@ -431,7 +513,6 @@
           <span class="muted">Model ${num(reconciliation.modeled_loss_qty_mean)} ± ${num(reconciliation.modeled_loss_qty_std_dev)} kg · ${money(reconciliation.modeled_loss_value_mean)} ± ${money(reconciliation.modeled_loss_value_std_dev)}</span>
         </span>
       </div>
-      <div class="button-row" style="margin-top:1rem"><a class="btn btn--ghost" href="#daily">See the profit autopsy</a></div>
     `;
   }
 
@@ -461,7 +542,7 @@
         </div>`;
     }).join("");
     card.innerHTML = `
-      <div class="card__head"><div><p class="eyebrow">Profit autopsy</p><h3>From sales to true profit</h3></div><span class="muted">1σ</span></div>
+      <div class="card__head"><div><h3>Profit breakdown</h3></div><span class="muted">1σ bands</span></div>
       <div class="waterfall">${rows}</div>
     `;
   }
@@ -476,11 +557,11 @@
     }
     const stack = components.map((component) => {
       const width = Math.max(0, Math.min(100, Number(component.share_mean) * 100));
-      const color = LOSS_COLORS[component.cause] || "#65726a";
+      const color = LOSS_COLORS[component.cause] || LOSS_FALLBACK;
       return `<span style="width:${width}%;background:${color}" title="${esc(component.cause)}"></span>`;
     }).join("");
     const rows = components.map((component) => {
-      const color = LOSS_COLORS[component.cause] || "#65726a";
+      const color = LOSS_COLORS[component.cause] || LOSS_FALLBACK;
       return `
         <div>
           <div class="loss-legend__row">
@@ -520,9 +601,9 @@
     const evidence = truth.evidence_summary;
     const stats = [
       ["Events", evidence.total_events],
-      ["Fused entries", evidence.fused_entries],
-      ["Avg confidence", pct(evidence.average_confidence, 0)],
-      ["Hostile recoveries", evidence.hostile_clock_recoveries],
+      ["Fused", evidence.fused_entries],
+      ["Confidence", pct(evidence.average_confidence, 0)],
+      ["Rescued", evidence.hostile_clock_recoveries],
     ];
     const sourceMix = Object.entries(evidence.source_mix)
       .map(([source, count]) => `<span class="chip chip--${sourceClass(source)}">${esc(source)} ${esc(count)}</span>`)
@@ -530,47 +611,70 @@
     const actions = (truth.actions || []).map((action) => `<li>${esc(action)}</li>`).join("");
     card.innerHTML = `
       <div class="card__head">
-        <div><p class="eyebrow">Evidence ledger</p><h3>What supports today's numbers</h3></div>
-        <span class="muted">${esc(truth.business_date)}</span>
+        <div><h3>Evidence summary</h3></div>
       </div>
       <div class="evidence-grid">
         ${stats.map(([label, value]) => `<div class="stat"><div class="stat__label">${esc(label)}</div><div class="stat__value">${esc(value)}</div></div>`).join("")}
       </div>
-      <div class="button-row">${sourceMix}</div>
-      <p class="muted" style="margin-top:1rem">${esc(truth.narrative)}</p>
+      <div class="evidence-chips">${sourceMix}</div>
+      <p class="muted" style="margin:10px 0 0">${esc(truth.narrative)}</p>
       <ul class="action-list">${actions}</ul>
       <div class="fingerprint">
         <span class="faint">SHA-256 ledger fingerprint</span>
         <code>${esc(truth.ledger_fingerprint)}</code>
-        <button class="btn btn--small btn--ghost" type="button" data-copy="${esc(truth.ledger_fingerprint)}">Copy</button>
+      </div>
+      <div class="button-row">
+        <button class="btn btn--small btn--outline" type="button" data-copy="${esc(truth.ledger_fingerprint)}">Copy fingerprint</button>
       </div>
     `;
   }
 
+  function ledgerMatchesFilter(entry) {
+    if (state.ledgerFilter === "all") return true;
+    if (state.ledgerFilter === "fused") return entry.status === "fused";
+    if (state.ledgerFilter === "pending") return entry.status === "pending";
+    if (state.ledgerFilter === "suspect") return is1970(entry) || entry.clock_suspect;
+    return true;
+  }
+
   function renderLedger() {
-    const body = $("#ledger-body");
+    const list = $("#ledger-list");
+    const entries = state.ledger.filter(ledgerMatchesFilter);
     if (!state.ledger.length) {
-      body.innerHTML = `<tr><td colspan="7" class="table-empty">No ledger entries. Reset the demo.</td></tr>`;
+      list.innerHTML = emptyState("No ledger entries. Reset the demo from More.");
       return;
     }
-    body.innerHTML = state.ledger.map((entry) => {
+    if (!entries.length) {
+      list.innerHTML = emptyState("No entries match this filter.");
+      return;
+    }
+    list.innerHTML = entries.map((entry) => {
       const canonical = entry.transaction_id === SEED.canonicalTx;
       const probe = is1970(entry);
-      const qty = entry.debit.qty_mean != null ? `${num(entry.debit.qty_mean, 3)} ${esc(entry.debit.unit || "")}` : "";
-      const warnings = [
-        entry.clock_suspect ? '<span class="tag tag--red">clock suspect</span>' : "",
-        probe ? '<span class="tag tag--red">1970</span>' : "",
-      ].filter(Boolean).join(" ");
+      const qty = entry.debit.qty_mean != null ? ` · ${num(entry.debit.qty_mean, 3)} ${esc(entry.debit.unit || "")}` : "";
+      const sourceChips = entry.event_ids.map(findEvent).filter(Boolean)
+        .slice(0, 3)
+        .map((event) => `<span class="chip chip--${sourceClass(event.source)}">${esc(event.source)}</span>`)
+        .join("");
       return `
-        <tr class="${canonical ? "is-canonical" : ""} ${probe ? "is-probe" : ""}">
-          <td data-label="Clock"><span class="mono">${esc(entry.logical_clock)}</span><span class="cell-sub">${esc(entry.device_id)}</span></td>
-          <td data-label="Status">${statusTag(entry.status)}</td>
-          <td data-label="Accounts"><span class="cell-main">${esc(entry.debit.account)}</span><span class="cell-sub">→ ${esc(entry.credit.account)}</span></td>
-          <td data-label="Amount"><span class="cell-main">${money(entry.debit.amount_mean)}</span><span class="cell-sub">± ${money(entry.debit.amount_std_dev)}${qty ? ` · ${qty}` : ""}</span></td>
-          <td data-label="Confidence"><span class="cell-main">${pct(entry.confidence, 0)}</span><div class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></div></td>
-          <td data-label="Evidence"><div class="badge-stack">${entry.event_ids.length} line${entry.event_ids.length === 1 ? "" : "s"} ${warnings}</div></td>
-          <td data-label="Action"><button class="btn btn--small btn--outline" type="button" data-explain="${esc(entry.transaction_id)}">Explain</button></td>
-        </tr>`;
+        <button class="entry${canonical ? " is-canonical" : ""}${probe ? " is-probe" : ""}" type="button" data-explain="${esc(entry.transaction_id)}">
+          <span class="entry__top">
+            <span class="entry__clock">${esc(entry.logical_clock)}</span>
+            ${statusTag(entry.status)}
+            ${probe ? '<span class="tag tag--red">1970</span>' : (entry.clock_suspect ? '<span class="tag tag--red">clock</span>' : "")}
+            <span class="entry__device">${esc(shortDevice(entry.device_id))}</span>
+          </span>
+          <span class="entry__accounts">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</span>
+          <span class="entry__amount"><strong>${money(entry.debit.amount_mean)}</strong><span>± ${money(entry.debit.amount_std_dev)}${qty}</span></span>
+          <span class="entry__meter">
+            <span class="muted">${pct(entry.confidence, 0)}</span>
+            <span class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></span>
+          </span>
+          <span class="entry__foot">
+            <span class="entry__evidence">${entry.event_ids.length} evidence line${entry.event_ids.length === 1 ? "" : "s"} ${sourceChips}</span>
+            ${CHEVRON}
+          </span>
+        </button>`;
     }).join("");
   }
 
@@ -605,7 +709,7 @@
     }
     const result = state.lastMerge;
     card.innerHTML = `
-      <div class="card__head"><h3>Merge log</h3><span class="muted">${esc(result.conflicts_resolved)} conflicts resolved</span></div>
+      <div class="card__head"><h3>Merge log</h3><span class="tag tag--green">${esc(result.conflicts_resolved)} conflicts</span></div>
       <div class="log">${esc((result.merge_log || []).join("\n"))}</div>
     `;
   }
@@ -661,14 +765,14 @@
   }
 
   function renderEvents() {
-    const body = $("#events-body");
+    const list = $("#events-body");
     const used = new Set(state.ledger.flatMap((entry) => entry.event_ids));
     const events = state.events.filter((event) => !state.pendingOnly || !used.has(event.event_id));
     if (!events.length) {
-      body.innerHTML = `<tr><td colspan="5" class="table-empty">No events match the current filter.</td></tr>`;
+      list.innerHTML = emptyState("No events match the current filter.");
       return;
     }
-    body.innerHTML = events.map((event) => {
+    list.innerHTML = events.map((event) => {
       const entity = event.extracted_entities?.[0];
       const entityText = entity
         ? `${entity.item} · ${num(entity.qty, 2)} ${esc(entity.unit)}${entity.price != null ? ` · ${money(entity.price)}` : ""}`
@@ -678,13 +782,19 @@
         ? '<span class="tag tag--quiet">in ledger</span>'
         : '<span class="tag tag--amber">pending</span>';
       return `
-        <tr>
-          <td data-label="Source"><span class="chip chip--${sourceClass(event.source)}">${esc(event.source)}</span><span class="cell-sub">${esc(event.device_id)}</span></td>
-          <td data-label="Evidence"><span class="cell-main">${esc(truncate(event.raw_text, 92) || "—")}</span><span class="cell-sub">${esc(entityText)}</span></td>
-          <td data-label="Logical"><span class="mono">${esc(event.logical_clock)}</span></td>
-          <td data-label="Wall clock"><span>${esc(fmtDate(event.wall_clock))}</span> ${suspect}</td>
-          <td data-label="State">${usedState}</td>
-        </tr>`;
+        <div class="event">
+          <div class="event__top">
+            <span class="chip chip--${sourceClass(event.source)}">${esc(event.source)}</span>
+            ${usedState}
+            ${suspect}
+            <span class="event__device">${esc(shortDevice(event.device_id))} · ${esc(event.logical_clock)}</span>
+          </div>
+          <div class="event__text">${esc(truncate(event.raw_text, 110) || "—")}</div>
+          <div class="event__meta">
+            <span>${esc(entityText)}</span>
+            <span class="mono">${esc(fmtDate(event.wall_clock))}</span>
+          </div>
+        </div>`;
     }).join("");
   }
 
@@ -728,7 +838,7 @@
       recipes.innerHTML = emptyState("No recipe burn rates loaded.");
     } else {
       recipes.innerHTML = `
-        <div class="card__head"><div><p class="eyebrow">Recipe intel</p><h3>Ingredient burn rates</h3></div><span class="muted">${state.recipes.length} lines</span></div>
+        <div class="card__head"><div><p class="eyebrow">Recipes</p><h3>Ingredient burn rates</h3></div><span class="muted">${state.recipes.length} lines</span></div>
         <div class="extra-list">
           ${state.recipes.map((recipe) => `
             <div class="extra-row">
@@ -754,7 +864,7 @@
       const ratio = tightStd > 0 ? noisyStd / tightStd : 0;
       container.innerHTML = `
         <h3>Live range comparison</h3>
-        <p>Same item and quantity; the only difference is how far the two quoted prices disagree.</p>
+        <p>Same item and quantity; only the quoted-price disagreement differs.</p>
         <div class="receipt-compare">
           <div><span>Tight quotes</span><strong>${money(tight.debit.amount_mean)} ± ${money(tightStd)}</strong></div>
           <div><span>Noisy quotes</span><strong>${money(noisy.debit.amount_mean)} ± ${money(noisyStd)}</strong></div>
@@ -770,7 +880,7 @@
       const entry = state.lastScenario.entry;
       container.innerHTML = `
         <h3>Pending pair fused</h3>
-        <p>The real Monte Carlo path fused the pending audio and SMS evidence into a balanced entry.</p>
+        <p>Monte Carlo fused the pending audio and SMS events into a balanced entry.</p>
         <div class="receipt-compare">
           <div><span>Amount</span><strong>${money(entry.debit.amount_mean)} ± ${money(entry.debit.amount_std_dev)}</strong></div>
           <div><span>Confidence</span><strong>${pct(entry.confidence, 0)}</strong></div>
@@ -785,14 +895,10 @@
 
   function renderApiLinks() {
     const base = state.apiBase.replace(/\/+$/, "");
-    ["docs-link", "footer-docs-link"].forEach((id) => {
-      const link = document.getElementById(id);
-      if (link) link.href = `${base}/docs`;
-    });
-    ["openapi-link", "footer-openapi-link"].forEach((id) => {
-      const link = document.getElementById(id);
-      if (link) link.href = `${base}/openapi.json`;
-    });
+    const docs = document.getElementById("docs-link");
+    const openapi = document.getElementById("openapi-link");
+    if (docs) docs.href = `${base}/docs`;
+    if (openapi) openapi.href = `${base}/openapi.json`;
   }
 
   function renderReceipt(explanation) {
@@ -854,8 +960,8 @@
         </div>
         <div class="badge-stack">
           ${explanation.canonical_fallback ? '<span class="tag tag--amber">pinned demo seed</span>' : '<span class="tag tag--green">live simulation</span>'}
-          ${explanation.sources.some((source) => source.clock_suspect) ? '<span class="tag tag--red">suspect clock in evidence</span>' : ""}
-          <span class="tag tag--quiet">${explanation.sources.length} source${explanation.sources.length === 1 ? "" : "s"}</span>
+          ${explanation.sources.some((source) => source.clock_suspect) ? '<span class="tag tag--red">suspect clock</span>' : ""}
+          <span class="tag">${explanation.sources.length} source${explanation.sources.length === 1 ? "" : "s"}</span>
         </div>
       </div>
 
@@ -865,7 +971,7 @@
         <div><span>Confidence</span><strong>${pct(explanation.confidence, 0)} / ${pct(explanation.simulated_confidence, 0)}</strong></div>
       </div>
 
-      ${explanation.canonical_fallback ? '<div class="receipt-callout">This is the canonical demo seed, pinned for rehearsal. The live Monte Carlo on the right is what the same evidence actually produces.</div>' : ""}
+      ${explanation.canonical_fallback ? '<div class="receipt-callout">This is the canonical demo seed, pinned for rehearsal. The live Monte Carlo above is what the same evidence actually produces.</div>' : ""}
 
       <section class="receipt-section">
         <h3>Evidence</h3>
@@ -880,50 +986,31 @@
           <div><span>Range multiplier</span><strong>${num(agreement.std_multiplier, 2)}×</strong></div>
           <div><span>Confidence delta</span><strong>${confidenceDelta(agreement.confidence_adjustment)}</strong></div>
         </div>
-        <p class="muted" style="margin:.55rem 0 0">Mean source confidence ${pct(agreement.mean_source_confidence, 1)}. ${esc(agreement.method)}.</p>
+        <p class="muted" style="margin:.55rem 0 0">Mean source confidence ${pct(agreement.mean_source_confidence, 1)}. Method: ${esc(agreement.method)}.</p>
       </section>
 
+      ${ranges.length ? `
       <section class="receipt-section">
         <h3>Counterfactual ranges</h3>
         <div class="counterfactual-grid">
           ${counterfactuals}
           ${ranges.length > 1 ? fusedCounterfactual : ""}
         </div>
-      </section>
+      </section>` : ""}
 
       <section class="receipt-section">
         <h3>Why</h3>
         <p class="narrative">${esc(explanation.narrative)}</p>
       </section>
 
+      ${(explanation.evidence_event_ids || []).length ? `
       <section class="receipt-section">
         <h3>Evidence IDs</h3>
         <div class="evidence-id-list">
           ${(explanation.evidence_event_ids || []).map((id) => `<span class="evidence-id">${esc(id)}</span>`).join("")}
         </div>
-      </section>
+      </section>` : ""}
     `;
-  }
-
-  let lastFocus = null;
-
-  function openModal() {
-    const modal = $("#receipt-modal");
-    if (!modal || !modal.hidden) return;
-    lastFocus = document.activeElement;
-    modal.hidden = false;
-    document.body.style.overflow = "hidden";
-    const close = modal.querySelector(".modal__header [data-close-modal]");
-    if (close) close.focus();
-  }
-
-  function closeModal() {
-    const modal = $("#receipt-modal");
-    if (!modal || modal.hidden) return;
-    if (lastFocus && typeof lastFocus.focus === "function") lastFocus.focus();
-    modal.hidden = true;
-    document.body.style.overflow = "";
-    lastFocus = null;
   }
 
   async function openReceipt(transactionId, button) {
@@ -931,13 +1018,15 @@
     try {
       const explanation = await api(`/ledger/${encodeURIComponent(transactionId)}/explain`);
       renderReceipt(explanation);
-      openModal();
+      openSheet("#receipt-sheet");
     } catch (error) {
       toast(error.message || "Could not load the Trust Receipt.", "error");
     } finally {
       setButtonBusy(button, false);
     }
   }
+
+  /* ---------- Scenario runners ---------- */
 
   async function runMoneyShot(button) {
     await runAction(button, async () => {
@@ -974,6 +1063,7 @@
 
       state.lastScenario = { type: "noisy", tight, noisy };
       await refreshAll({ quiet: true });
+      switchTab("more");
       const ratio = Number(tight.debit.amount_std_dev) > 0
         ? (Number(noisy.debit.amount_std_dev) / Number(tight.debit.amount_std_dev)).toFixed(2)
         : "—";
@@ -989,6 +1079,7 @@
       const entry = await api("/fuse", { method: "POST", body: { event_ids: [SEED.pendingAudio, SEED.pendingSms] } });
       state.lastScenario = { type: "pending", entry };
       await refreshAll({ quiet: true });
+      switchTab("more");
       toast(`Pending pair fused: ${money(entry.debit.amount_mean)} ± ${money(entry.debit.amount_std_dev)}.`);
     });
   }
@@ -998,9 +1089,8 @@
       const result = await api("/sync", { method: "POST", body: {} });
       state.lastMerge = result;
       await refreshAll({ quiet: true });
-      const section = $("#sync-section");
-      if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
-      toast(`Sync complete: ${result.conflicts_resolved} conflicts resolved, 0 losses.`);
+      switchTab("sync");
+      toast(`Sync complete: ${result.conflicts_resolved} conflicts resolved, 0 transactions lost.`);
     });
   }
 
@@ -1009,8 +1099,7 @@
       const result = await api("/simulate-clock", { method: "POST", body: { device_id: "device-b" } });
       state.lastClock = result;
       await refreshAll({ quiet: true });
-      const section = $("#sync-section");
-      if (section) section.scrollIntoView({ behavior: "smooth", block: "start" });
+      switchTab("sync");
       toast(`1970 clock detected; entry placed at logical clock ${result.logical_clock_used}.`);
     });
   }
@@ -1021,7 +1110,7 @@
       state.lastMerge = null;
       state.lastClock = null;
       state.lastScenario = null;
-      closeModal();
+      closeAllSheets();
       await refreshAll({ quiet: true });
       toast("Demo restored to the seed state.");
     });
@@ -1036,9 +1125,24 @@
     reset: runReset,
   };
 
+  /* ---------- Events ---------- */
+
   function bindEvents() {
     $("#refresh-btn").addEventListener("click", () => refreshAll());
     $("#retry-btn").addEventListener("click", () => refreshAll());
+    $("#fab").addEventListener("click", () => openSheet("#actions-sheet"));
+
+    $$(".bottomnav__item").forEach((item) => {
+      item.addEventListener("click", () => switchTab(item.dataset.tab));
+    });
+
+    $$("#ledger-filters .chip").forEach((chip) => {
+      chip.addEventListener("click", () => {
+        state.ledgerFilter = chip.dataset.filter;
+        $$("#ledger-filters .chip").forEach((item) => item.classList.toggle("is-active", item === chip));
+        renderLedger();
+      });
+    });
 
     $("#pending-toggle").addEventListener("change", (event) => {
       state.pendingOnly = event.target.checked;
@@ -1064,14 +1168,26 @@
       refreshAll();
     });
 
+    const themeToggle = $("#theme-toggle");
+    themeToggle.checked = document.documentElement.dataset.theme === "dark";
+    themeToggle.addEventListener("change", () => {
+      const theme = themeToggle.checked ? "dark" : "light";
+      document.documentElement.dataset.theme = theme;
+      window.localStorage.setItem("iw-theme", theme);
+    });
+
     document.addEventListener("click", (event) => {
-      const close = event.target.closest("[data-close-modal]");
-      if (close) {
-        closeModal();
+      if (event.target.closest("[data-close-modal]")) {
+        closeSheet("#receipt-sheet");
+        return;
+      }
+      if (event.target.closest("[data-close-sheet]")) {
+        closeSheet("#actions-sheet");
         return;
       }
       const action = event.target.closest("[data-action]");
       if (action) {
+        closeSheet("#actions-sheet");
         const runner = ACTIONS[action.dataset.action];
         if (runner) runner(action);
         return;
@@ -1086,16 +1202,24 @@
     });
 
     document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeModal();
+      if (event.key === "Escape") closeAllSheets();
     });
+  }
+
+  function registerServiceWorker() {
+    if (!("serviceWorker" in navigator)) return;
+    if (!window.location.protocol.startsWith("http")) return;
+    navigator.serviceWorker.register("sw.js").catch(() => {});
   }
 
   function boot() {
     bindEvents();
     renderSeedIds();
-    const input = $("#api-base");
-    input.value = state.apiBase;
+    $("#api-base").value = state.apiBase;
+    switchTab("today");
+    window.setTimeout(hideSplash, 2600);
     refreshAll();
+    registerServiceWorker();
   }
 
   if (document.readyState === "loading") {

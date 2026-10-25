@@ -1,0 +1,25 @@
+{
+  "name": "Invisible Worker",
+  "short_name": "Invisible",
+  "description": "Offline-first probabilistic ledger for street vendors. Every number has a range and a receipt.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f6f4",
+  "theme_color": "#0f6b46",
+  "icons": [
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

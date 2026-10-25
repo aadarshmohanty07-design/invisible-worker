@@ -6,9 +6,9 @@ Carlo / Dirichlet math, and a hand-rolled three-device CRDT simulation.
 
 The Flutter app is built separately and talks to this server over local Wi-Fi during the demo.
 
-The AI extraction layer (speech / OCR) is replaceable. The product difference is underneath it:
-auditable uncertainty, offline operation, conflict-free family sync, and a daily reconciliation
-that explains where the vendor's money went.
+The AI extraction layer (speech / OCR) is replaceable. This repo builds what sits under it: the
+uncertainty math, offline SQLite storage, the three-device CRDT sync, and the daily reconciliation
+that accounts for missing stock.
 
 ## Demo architecture
 
@@ -66,30 +66,31 @@ If the phone cannot connect:
 The same base URL with `/ui/` opens the web control panel on the phone:
 `http://<laptop-lan-ip>:8000/ui/`.
 
-## Demo control panel (`/ui/`)
+## Demo app (`/ui/`)
 
-A no-build web dashboard is served by the same FastAPI process from `frontend/`. It uses plain
-HTML/CSS/JavaScript, has no external assets, works over the LAN, and is responsive down to phone
-width. It is a rehearsal and demo surface; the Flutter app consumes the same API and contracts.
+A no-build, Android-style app is served by the same FastAPI process from `frontend/`. Plain
+HTML/CSS/JavaScript, no external assets, works over the LAN. It is a rehearsal and demo surface;
+the Flutter app consumes the same API and contracts.
 
-What is wired:
+**Install it like an app:** on an Android phone, open `/ui/` in Chrome and choose *Add to Home
+screen* (manifest + service worker + app icon are included). It then launches full-screen with its
+own icon. On a laptop (window wider than 700 px) the same page renders inside a phone frame so the
+demo still reads as an app.
 
-- **Today at a glance** — true profit ₹1,200 ± ₹179.51, the canonical ₹180 ± ₹25 money shot, and
-  the ghost-inventory gap (3 kg bought − 0.105 kg recipe use = 2.895 kg expected; 2.1 kg counted;
-  0.795 kg / ₹47.7 missing, inside the model's 1σ band).
-- **Trust Receipt modal** — evidence cards, agreement/disagreement math, per-source
-  counterfactuals, stored vs simulated values, and the plain-language narrative for any ledger
-  entry.
-- **Demo controls** — money shot, noisy quotes (live tight-vs-noisy range comparison), pending
-  pair, sync phones, 1970 clock, and reset.
-- **Profit autopsy** — the live Dirichlet loss split, loss drivers, quantiles, evidence summary,
-  actions, and SHA-256 ledger fingerprint.
-- **Family sync** — device cards, the derived merge log, the hostile-clock result, and the
-  logical-order proof that the 1970 probe is not at the top.
-- **Evidence and IDs** — raw events with pending/in-ledger state, the stable seed event and
-  transaction IDs with copy buttons for the Flutter demo buttons, plus credit and recipe panels.
-- **API connection** — same-origin by default; change the API base in the form or with
-  `?api=http://host:8000` to point the panel at another backend.
+**Layout:** top app bar with live API status, a FAB with quick actions, and a bottom tab bar —
+
+- **Today** — true profit ₹1,200 ± ₹179.51 with a confidence ring, the canonical ₹180 ± ₹25 money
+  shot, the ghost-inventory gap (2.1 kg counted vs 2.895 kg expected = 0.795 kg / ₹47.7 missing,
+  inside the model's 1σ band), the profit waterfall, the Dirichlet loss split, and the evidence
+  summary with the SHA-256 ledger fingerprint.
+- **Ledger** — every entry as a card with filter chips (All / Fused / Pending / 1970 clock); tap
+  any entry for the **Trust Receipt** bottom sheet: evidence cards, agreement/disagreement math,
+  per-source counterfactuals, stored vs simulated values, and the plain-language narrative.
+- **Sync** — device cards, the derived merge log, the hostile-clock result, and the logical-order
+  proof that the 1970 probe lands at the bottom, not the top.
+- **More** — the six demo scenarios (money shot, noisy quotes, pending pair, sync, 1970 clock,
+  reset), udhaar and recipe panels, raw events with a pending-only switch, seed IDs with copy
+  buttons, the API-base setting, and a dark-theme toggle (follows the system by default).
 
 Suggested rehearsal sequence:
 
@@ -106,7 +107,7 @@ raises a server error instead of returning bad data.
 
 | Method | Path                                | Returns                 | Purpose |
 |--------|-------------------------------------|-------------------------|---------|
-| GET    | `/ui/`                              | HTML dashboard          | Built-in demo/rehearsal control panel |
+| GET    | `/ui/`                              | HTML app                | Built-in Android-style demo app (PWA) |
 | GET    | `/`                                 | redirect                | Redirects to `/ui/` |
 | GET    | `/health`                           | untyped status          | Liveness probe |
 | POST   | `/events`                           | `TransactionEvent`      | Accept raw audio/OCR/SMS/manual evidence; mock entity extraction with Hindi numerals |
@@ -139,10 +140,10 @@ validated against `schemas.json`.
 - Fused entry: `Inventory:Tomatoes` debit ₹180 ± ₹25, `Cash` credit ₹180 ± ₹25,
   `status: fused`, `clock_suspect: true`, logical clock 43
 
-The canonical audio+OCR pair is pinned to the seed entry for a bulletproof demo. Fusing the same
-content under different event IDs exercises the real Monte Carlo path and returns a mean within
-₹10 of ₹180. `/ledger/{CANONICAL_TX_ID}/explain` is explicit about the pinned value and shows the
-live simulated range next to it.
+The canonical audio+OCR pair is pinned to the seed entry so the demo always shows ₹180 ± ₹25.
+Fusing the same content under different event IDs exercises the real Monte Carlo path and returns
+a mean within ₹10 of ₹180. `/ledger/{CANONICAL_TX_ID}/explain` is explicit about the pinned value
+and shows the live simulated range next to it.
 
 The 1970 clock is accepted as input and ignored for ordering. History is sorted by
 `(logical_clock, device_id, transaction_id)`.
