@@ -103,6 +103,36 @@
     return Number.isFinite(number) ? `${number.toFixed(digits)}%` : "—";
   }
 
+  const COUNT_FORMATS = {
+    money: (value) => money(value),
+    int: (value) => String(Math.round(value)),
+    pct: (value) => pct(value, 0),
+  };
+  const countValues = new Map();
+
+  function countUp(root = document) {
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    root.querySelectorAll("[data-count]").forEach((element) => {
+      const target = Number(element.dataset.count);
+      if (!Number.isFinite(target)) return;
+      const key = element.dataset.countKey || element.className;
+      const format = COUNT_FORMATS[element.dataset.countFormat] || COUNT_FORMATS.int;
+      const previous = countValues.has(key) ? countValues.get(key) : 0;
+      countValues.set(key, target);
+      if (previous === target) return;
+      const started = performance.now();
+      const duration = 820;
+      element.textContent = format(previous);
+      const tick = (now) => {
+        const progress = Math.min(1, (now - started) / duration);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        element.textContent = format(previous + (target - previous) * eased);
+        if (progress < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    });
+  }
+
   function confidenceDelta(value) {
     const number = Number(value) || 0;
     const points = number * 100;
@@ -372,7 +402,10 @@
 
     if (!state.firstRefreshDone) {
       state.firstRefreshDone = true;
-      window.setTimeout(hideSplash, 450);
+      window.setTimeout(hideSplash, 300);
+      window.setTimeout(() => countUp(), 380);
+    } else {
+      countUp();
     }
   }
 
@@ -425,7 +458,7 @@
       <div class="hero-top">
         <div>
           <p class="eyebrow">True profit · ${esc(summary.time_period)}</p>
-          <p class="hero-amount">${money(summary.profit_mean)}</p>
+          <p class="hero-amount" data-count="${Number(summary.profit_mean)}" data-count-format="money" data-count-key="profit">${money(summary.profit_mean)}</p>
           <p class="hero-sub">± ${money(summary.profit_std_dev)} one-sigma band</p>
         </div>
         <div class="conf-ring">
@@ -467,7 +500,7 @@
         <div><p class="eyebrow">Money shot</p><h3>Fused tomato purchase</h3></div>
         ${entry.clock_suspect ? '<span class="tag tag--red">1970 clock</span>' : ""}
       </div>
-      <p class="shot-amount">${money(entry.debit.amount_mean)}</p>
+      <p class="shot-amount" data-count="${Number(entry.debit.amount_mean)}" data-count-format="money" data-count-key="shot:${esc(entry.transaction_id)}">${money(entry.debit.amount_mean)}</p>
       <div class="sub-number">± ${money(entry.debit.amount_std_dev)} <span>1σ</span></div>
       <p class="shot-account">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</p>
       <div class="evidence-chips">${chips || '<span class="chip">Evidence attached</span>'}</div>
@@ -665,7 +698,7 @@
             <span class="entry__device">${esc(shortDevice(entry.device_id))}</span>
           </span>
           <span class="entry__accounts">${esc(entry.debit.account)} → ${esc(entry.credit.account)}</span>
-          <span class="entry__amount"><strong>${money(entry.debit.amount_mean)}</strong><span>± ${money(entry.debit.amount_std_dev)}${qty}</span></span>
+          <span class="entry__amount"><strong data-count="${Number(entry.debit.amount_mean)}" data-count-format="money" data-count-key="entry:${esc(entry.transaction_id)}">${money(entry.debit.amount_mean)}</strong><span>± ${money(entry.debit.amount_std_dev)}${qty}</span></span>
           <span class="entry__meter">
             <span class="muted">${pct(entry.confidence, 0)}</span>
             <span class="confidence-bar"><span style="width:${Math.round(entry.confidence * 100)}%"></span></span>
@@ -955,7 +988,7 @@
       <div class="receipt-hero">
         <div>
           <p class="eyebrow">Stored entry ${esc(explanation.status)}</p>
-          <div class="receipt-amount">${money(explanation.amount_mean)}</div>
+          <div class="receipt-amount" data-count="${Number(explanation.amount_mean)}" data-count-format="money" data-count-key="receipt">${money(explanation.amount_mean)}</div>
           <p class="receipt-sub">± ${money(explanation.amount_std_dev)} · confidence ${pct(explanation.confidence, 0)}</p>
         </div>
         <div class="badge-stack">
@@ -1019,6 +1052,7 @@
       const explanation = await api(`/ledger/${encodeURIComponent(transactionId)}/explain`);
       renderReceipt(explanation);
       openSheet("#receipt-sheet");
+      countUp(document.querySelector("#receipt-body") || document);
     } catch (error) {
       toast(error.message || "Could not load the Trust Receipt.", "error");
     } finally {

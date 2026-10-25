@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Invisible Worker — CASCADE '26</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+
+  body {
+    overflow: hidden;
+    background: #100d07;
+    color: #f2ecdb;
+    font-family: "Segoe UI Variable Text", "Segoe UI", "Noto Sans", system-ui, -apple-system, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .stage {
+    position: fixed;
+    inset: 0;
+    isolation: isolate;
+    overflow: hidden;
+    background:
+      radial-gradient(120% 90% at 12% 0%, #4c4228 0%, rgba(76, 66, 40, 0) 55%),
+      radial-gradient(110% 80% at 88% 10%, #332c18 0%, rgba(51, 44, 24, 0) 52%),
+      radial-gradient(140% 100% at 50% 100%, #14100a 0%, rgba(20, 16, 10, 0) 62%),
+      linear-gradient(180deg, #262012, #100d07);
+  }
+
+  .stage::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    opacity: .06;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  .stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(120% 100% at 50% 42%, transparent 45%, rgba(0, 0, 0, .45) 100%);
+  }
+
+  .ghost {
+    position: absolute;
+    top: -.14em;
+    left: -.015em;
+    z-index: 0;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Noto Sans", system-ui, sans-serif;
+    font-size: 23.5vw;
+    font-weight: 700;
+    line-height: .78;
+    letter-spacing: -.045em;
+    white-space: nowrap;
+    color: rgba(242, 236, 219, .06);
+    pointer-events: none;
+    user-select: none;
+  }
+
+  .brand {
+    position: absolute;
+    top: clamp(28px, 3.4vw, 54px);
+    left: clamp(28px, 3.4vw, 54px);
+    z-index: 6;
+    display: flex;
+    align-items: center;
+    gap: clamp(11px, .9vw, 15px);
+  }
+
+  .mark {
+    width: clamp(40px, 3vw, 50px);
+    height: clamp(40px, 3vw, 50px);
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 14px;
+    background: #0f6b46;
+    color: #fffcf4;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .38), inset 0 1px 0 rgba(255, 255, 255, .22);
+  }
+
+  .mark svg { width: 58%; height: 58%; }
+
+  .brand__text strong {
+    display: block;
+    font-family: "Segoe UI Variable Display", "Segoe UI", "Noto Sans", system-ui, sans-serif;
+    font-size: clamp(18px, 1.25vw, 23px);
+    font-weight: 600;
+    letter-spacing: -.015em;
+  }
+
+  .brand__text span {
+    display: block;
+    margin-top: 2px;
+    font-size: clamp(12px, .82vw, 14px);
+    color: rgba(242, 236, 219, .58);
+  }
+
+  .phones {
+    position: absolute;
+    inset: 0;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: clamp(16px, 2.4vw, 62px);
+    padding: 5vh 4vw;
+  }
+
+  .phones::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    width: 58vw;
+    height: 64vh;
+    background: radial-gradient(closest-side, rgba(88, 209, 145, .17), rgba(88, 209, 145, 0) 72%);
+    filter: blur(14px);
+  }
+
+  .phone {
+    position: relative;
+    flex: none;
+    margin: 0;
+    padding: clamp(8px, .55vw, 12px);
+    border-radius: clamp(30px, 3.1vw, 46px);
+    border: 1px solid rgba(255, 255, 255, .17);
+    background: linear-gradient(155deg, #3a3220 0%, #17130b 55%, #0c0a06 100%);
+    box-shadow:
+      0 55px 120px rgba(0, 0, 0, .62),
+      0 10px 28px rgba(0, 0, 0, .42),
+      inset 0 1px 0 rgba(255, 255, 255, .22);
+  }
+
+  .phone img {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: calc(clamp(30px, 3.1vw, 46px) - clamp(8px, .55vw, 12px));
+  }
+
+  .phone--left {
+    width: clamp(210px, 19.5vw, 500px);
+    z-index: 2;
+    transform: rotate(-3.2deg) translateY(3.2%);
+    margin-right: clamp(-30px, -1vw, -6px);
+  }
+
+  .phone--center {
+    width: clamp(240px, 22vw, 563px);
+    z-index: 4;
+    transform: translateY(-3.4%);
+  }
+
+  .phone--right {
+    width: clamp(210px, 19.5vw, 500px);
+    z-index: 2;
+    transform: rotate(3deg) translateY(4%);
+    margin-left: clamp(-30px, -1vw, -6px);
+  }
+
+  .foot {
+    position: absolute;
+    left: clamp(28px, 3.4vw, 54px);
+    right: clamp(28px, 3.4vw, 54px);
+    bottom: clamp(22px, 2.2vw, 34px);
+    z-index: 6;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+    font-size: clamp(12px, .8vw, 17px);
+    line-height: 1.55;
+  }
+
+  .foot__line { color: rgba(242, 236, 219, .60); }
+  .foot__event { color: rgba(242, 236, 219, .42); text-align: right; }
+  .foot__event strong { display: block; font-weight: 600; color: rgba(242, 236, 219, .60); }
+
+  @media (max-aspect-ratio: 4/5) {
+    .ghost {
+      top: 3.2%;
+      left: -3vw;
+      font-size: 20vw;
+    }
+
+    .ghost__second { display: none; }
+
+    .brand {
+      top: 5.4%;
+      left: 7vw;
+    }
+
+    .brand__text strong { font-size: clamp(20px, 2.4vw, 30px); }
+    .brand__text span { font-size: clamp(12px, 1.05vw, 15px); }
+
+    .phones {
+      display: block;
+      padding: 0;
+    }
+
+    .phones::before {
+      width: 120vw;
+      height: 70vh;
+      left: -20vw;
+      top: 12vh;
+    }
+
+    .phone--left { display: none; }
+
+    .phone--center {
+      position: absolute;
+      left: 7vw;
+      top: 18vh;
+      width: 58vw;
+      transform: rotate(-3deg);
+      margin: 0;
+    }
+
+    .phone--right {
+      position: absolute;
+      left: 56vw;
+      top: 29vh;
+      width: 46vw;
+      transform: rotate(6deg);
+      margin: 0;
+      z-index: 2;
+    }
+
+    .foot {
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 7px;
+      bottom: 3.6vh;
+      font-size: 15px;
+    }
+
+    .foot__event { text-align: left; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage">
+    <div class="ghost" aria-hidden="true"><span>INVISIBLE</span> <span class="ghost__second">WORKER</span></div>
+
+    <header class="brand">
+      <span class="mark" aria-hidden="true">
+        <svg viewBox="0 0 40 40" role="img" focusable="false">
+          <path d="M8 11.5 20 5l12 6.5v17L20 35 8 28.5z" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"/>
+          <path d="M13 16h14M13 21h14M13 26h9" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="brand__text">
+        <strong>Invisible Worker</strong>
+        <span>Offline-first probabilistic ledger</span>
+      </span>
+    </header>
+
+    <main class="phones">
+      <figure class="phone phone--left">
+        <img src="showcase/today.png" alt="Today tab: true profit with uncertainty band and fused money shot">
+      </figure>
+      <figure class="phone phone--center">
+        <img src="showcase/receipt.png" alt="Trust Receipt for the fused tomato purchase, with both source events">
+      </figure>
+      <figure class="phone phone--right">
+        <img src="showcase/sync.png" alt="Sync tab: three device replicas and merge log">
+      </figure>
+    </main>
+
+    <footer class="foot">
+      <span class="foot__line">Every number has a range and a receipt.</span>
+      <span class="foot__event">
+        <strong>CASCADE ’26, Theme 1 Problem 2</strong>
+        Monte Carlo fusion, Dirichlet loss and CRDT sync under hostile clocks
+      </span>
+    </footer>
+  </div>
+</body>
+</html>
