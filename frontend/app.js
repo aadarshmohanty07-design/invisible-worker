@@ -316,7 +316,7 @@
   /* ---------- Tabs, sheets and device motion ---------- */
 
   const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const desktopFrame = () => window.matchMedia("(min-width: 700px)").matches;
+  const desktopFrame = () => window.matchMedia("(min-width: 700px) and (hover: hover) and (pointer: fine)").matches;
   const deviceMotion = { x: 0, y: 0, s: 1, tx: 0, ty: 0, ts: 1, frame: 0 };
   let pageEnterTimer = 0;
 
@@ -2276,6 +2276,13 @@
 
   /* ---------- Events ---------- */
 
+  function setTheme(theme) {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("iw-theme", theme);
+    const meta = document.getElementById("theme-color");
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#100d07" : "#d9cdac");
+  }
+
   function bindEvents() {
     $("#refresh-btn").addEventListener("click", () => refreshLocal());
     $("#retry-btn").addEventListener("click", () => refreshLocal());
@@ -2336,9 +2343,7 @@
     const themeToggle = $("#theme-toggle");
     themeToggle.checked = document.documentElement.dataset.theme === "dark";
     themeToggle.addEventListener("change", () => {
-      const theme = themeToggle.checked ? "dark" : "light";
-      document.documentElement.dataset.theme = theme;
-      window.localStorage.setItem("iw-theme", theme);
+      setTheme(themeToggle.checked ? "dark" : "light");
     });
 
     document.addEventListener("click", (event) => {

@@ -4,8 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="color-scheme" content="light dark">
-  <meta name="theme-color" media="(prefers-color-scheme: light)" content="#d9cdac">
-  <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#100d07">
+  <meta name="theme-color" id="theme-color" content="#d9cdac">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -20,7 +19,11 @@
         var stored = localStorage.getItem("iw-theme");
         var theme = stored || (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
         document.documentElement.dataset.theme = theme;
-      } catch (error) { document.documentElement.dataset.theme = "light"; }
+        var themeMeta = document.getElementById("theme-color");
+        if (themeMeta) themeMeta.setAttribute("content", theme === "dark" ? "#100d07" : "#d9cdac");
+      } catch (error) {
+        document.documentElement.dataset.theme = "light";
+      }
     })();
   </script>
   <link rel="stylesheet" href="styles.css">
