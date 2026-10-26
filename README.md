@@ -104,15 +104,17 @@ use it.
    **To check** and widens the range. **Why ₹X?** then plays the video or voice note, shows the
    bill photos, and links the context notes. Photos and video stay on this phone.
 
-**Voice assistant (English / हिंदी)**
+**Voice assistant (6 languages)**
 
-The mic button beside **+** opens a guided assistant. It speaks the question, waits for the answer,
-and walks through: sold/spent → item → rupees → quantity → spoken confirmation → save. It also
-answers "how much did I make?", "why this number?", "count stock" and "sync", and reads the result
-aloud. The language defaults to the phone's language; **Use my location** picks Hindi or English
-from the nearest state (offline, no map API), and the language button switches manually. Every
-button stays available. Browser speech recognition needs internet; speech output and the entire
-money book keep working offline.
+The mic button beside **+** opens a guided assistant in **English, हिंदी, मराठी, ଓଡ଼ିଆ, தமிழ் and
+తెలుగు**. Pick a language in the assistant, or start from the phone's language. **Use my location**
+maps the GPS position to the nearest Indian state and picks one of the six languages offline (no
+map API): Maharashtra → Marathi, Odisha → Odia, Tamil Nadu → Tamil, Telangana/Andhra → Telugu, the
+Hindi belt → Hindi, elsewhere English. It speaks the question, waits for the answer, and walks
+through sold/spent → item → rupees → quantity → spoken confirmation → save; it also answers "how
+much did I make?", "why this number?", "count stock" and "sync" aloud. Every button stays
+available. Browser speech recognition needs internet; speech output and the entire money book keep
+working offline. Voice output needs a matching language voice installed on the phone.
 
 **Screens**
 
@@ -127,6 +129,11 @@ money book keep working offline.
   saved here; sync only moves unsynced notes to the shop server and pulls notes from other phones.
 - **More** — count stock, start over, dark screen, and **Advanced** (shop server, all notes on this
   phone, load the example day).
+
+**Motion** — the app takes its cues from a 3D device reel: on a laptop the phone frame wakes from a
+slight tilt and follows the pointer; tabs fly in with depth; cards stagger; sheets lift in 3D; the
+hero catches a soft sheen; numbers count up. Everything is transform/opacity based and every
+animation is disabled under `prefers-reduced-motion`.
 
 **Offline model** (`frontend/local.js`)
 
@@ -152,8 +159,9 @@ Suggested rehearsal (five minutes, on the phone, in airplane mode after the firs
 2. Take a photo of a bill, add a bill photo, link an earlier note, and save → open **Why ₹X?** to
    show the bill and the linked context.
 3. Record a 10-second **video** of a handover, enter the amount and save; open **Why** to play it.
-4. Tap the **mic**, ask "how much did I make?", then switch to हिंदी and ask "आज की कमाई" — the
-   answer is spoken in the selected language.
+4. Tap the **mic**, ask "how much did I make?", then switch to हिंदी, தமிழ் or తెలుగు and ask
+   "आज की कमाई" — the answer is spoken in the selected language. **Use my location** picks the
+   language from the nearest state.
 5. **Count stock** → the missing kilos and rupees appear on Today and are subtracted from profit.
 6. Toggle airplane mode: the app keeps working. **Phones → Sync with shop** sends the notes and
    pulls notes from another phone.

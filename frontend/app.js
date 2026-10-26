@@ -55,10 +55,13 @@
       contextIds: [],
     },
     assistant: {
-      lang: window.localStorage.getItem("iw-lang") === "hi"
-        || (!window.localStorage.getItem("iw-lang") && String(navigator.language || "").toLowerCase().startsWith("hi"))
-        ? "hi"
-        : "en",
+      lang: (() => {
+        const supported = ["en", "hi", "mr", "or", "ta", "te"];
+        const stored = window.localStorage.getItem("iw-lang");
+        if (supported.includes(stored)) return stored;
+        const prefix = String(navigator.language || "").toLowerCase().split("-")[0];
+        return supported.includes(prefix) ? prefix : "en";
+      })(),
       state: null,
       draft: null,
       recognition: null,
@@ -310,24 +313,121 @@
     }
   }
 
-  /* ---------- Tabs & sheets ---------- */
+  /* ---------- Tabs, sheets and device motion ---------- */
+
+  const reduceMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const desktopFrame = () => window.matchMedia("(min-width: 700px)").matches;
+  const deviceMotion = { x: 0, y: 0, s: 1, tx: 0, ty: 0, ts: 1, frame: 0 };
+  let pageEnterTimer = 0;
+
+  function applyDeviceMotion() {
+    const app = $("#app");
+    if (!app) return;
+    app.style.setProperty("--tilt-x", `${deviceMotion.x.toFixed(2)}deg`);
+    app.style.setProperty("--tilt-y", `${deviceMotion.y.toFixed(2)}deg`);
+    app.style.setProperty("--tilt-scale", deviceMotion.s.toFixed(4));
+  }
+
+  function stepDeviceMotion() {
+    const motion = deviceMotion;
+    motion.x += (motion.tx - motion.x) * 0.11;
+    motion.y += (motion.ty - motion.y) * 0.11;
+    motion.s += (motion.ts - motion.s) * 0.11;
+    applyDeviceMotion();
+    const settled = Math.abs(motion.tx - motion.x) < 0.02
+      && Math.abs(motion.ty - motion.y) < 0.02
+      && Math.abs(motion.ts - motion.s) < 0.001;
+    motion.frame = settled ? 0 : window.requestAnimationFrame(stepDeviceMotion);
+  }
+
+  function startDeviceMotion() {
+    if (!deviceMotion.frame) deviceMotion.frame = window.requestAnimationFrame(stepDeviceMotion);
+  }
+
+  function wakeDevice() {
+    if (reduceMotion() || !desktopFrame()) return;
+    const motion = deviceMotion;
+    motion.x = 6.5;
+    motion.y = -9;
+    motion.s = 0.972;
+    motion.tx = 0;
+    motion.ty = 0;
+    motion.ts = 1;
+    applyDeviceMotion();
+    startDeviceMotion();
+  }
+
+  function flattenDevice() {
+    if (reduceMotion() || !desktopFrame()) return;
+    deviceMotion.tx = 0;
+    deviceMotion.ty = 0;
+    deviceMotion.ts = 1;
+    startDeviceMotion();
+  }
+
+  function setupDeviceMotion() {
+    if (reduceMotion()) return;
+    window.addEventListener("pointermove", (event) => {
+      if (!desktopFrame()) return;
+      if (document.body.style.overflow === "hidden") {
+        flattenDevice();
+        return;
+      }
+      if (event.target instanceof Element && event.target.closest("input, textarea, select")) {
+        flattenDevice();
+        return;
+      }
+      const nx = (event.clientX / window.innerWidth - 0.5) * 2;
+      const ny = (event.clientY / window.innerHeight - 0.5) * 2;
+      deviceMotion.tx = -ny * 1.5;
+      deviceMotion.ty = nx * 1.9;
+      deviceMotion.ts = 1;
+      startDeviceMotion();
+    }, { passive: true });
+    document.addEventListener("pointerleave", flattenDevice);
+    window.addEventListener("blur", flattenDevice);
+  }
 
   function switchTab(tab) {
     if (!TAB_SUBTITLES[tab]) return;
+    const current = $(".page:not([hidden])");
+    const next = $(`#page-${tab}`);
+    if (!next) return;
     state.tab = tab;
-    $$(".page").forEach((page) => {
-      page.hidden = page.dataset.page !== tab;
-    });
     $$(".bottomnav__item").forEach((item) => {
       item.classList.toggle("is-active", item.dataset.tab === tab);
     });
     $("#appbar-sub").textContent = TAB_SUBTITLES[tab];
     $("#main").scrollTop = 0;
+    if (current === next) return;
+    $$(".page").forEach((page) => {
+      if (page === next) return;
+      page.hidden = true;
+      page.classList.remove("page--enter");
+      [...page.children].forEach((child) => child.style.removeProperty("--stagger"));
+    });
+    next.hidden = false;
+    next.classList.remove("page--enter");
+    if (pageEnterTimer) window.clearTimeout(pageEnterTimer);
+    if (reduceMotion()) {
+      [...next.children].forEach((child) => child.style.removeProperty("--stagger"));
+      return;
+    }
+    void next.offsetWidth;
+    [...next.children].forEach((child, index) => {
+      child.style.setProperty("--stagger", Math.min(index, 6));
+    });
+    next.classList.add("page--enter");
+    pageEnterTimer = window.setTimeout(() => {
+      next.classList.remove("page--enter");
+      [...next.children].forEach((child) => child.style.removeProperty("--stagger"));
+    }, 1100);
   }
 
   function openSheet(id) {
     const sheet = $(id);
     if (!sheet || !sheet.hidden) return;
+    flattenDevice();
     sheet.hidden = false;
     document.body.style.overflow = "hidden";
   }
@@ -355,6 +455,7 @@
     if (!splash || splash.classList.contains("is-hide")) return;
     splash.classList.add("is-hide");
     splash.setAttribute("aria-hidden", "true");
+    window.setTimeout(wakeDevice, 160);
     window.setTimeout(() => splash.remove(), 600);
   }
 
@@ -1395,6 +1496,7 @@
       locationDenied: "Location not available. Switch language with the button.",
       locationSet: "Language set from your location.",
       langSet: "I will speak in English.",
+      languagePrompt: "I can speak English, Hindi, Marathi, Odia, Tamil or Telugu.",
       saveFailed: "Could not save. Try again.",
     },
     hi: {
@@ -1436,59 +1538,263 @@
       locationDenied: "लोकेशन नहीं मिली। भाषा बटन से बदलिए।",
       locationSet: "आपकी जगह के हिसाब से भाषा चुनी।",
       langSet: "अब हिंदी में बोलूँगा।",
+      languagePrompt: "मैं अंग्रेज़ी, हिंदी, मराठी, ओड़िया, तमिल और तेलुगु बोल सकता हूँ।",
       saveFailed: "सेव नहीं हो सका। फिर कोशिश कीजिए।",
+    },
+    mr: {
+      title: "विचारा",
+      eyebrow: "आवाज सहाय्यक",
+      idle: "माइक दाबून बोला",
+      statusListening: "ऐकत आहे…",
+      langName: "मराठी",
+      otherLang: "",
+      locationLabel: "माझ्या जागेवरून भाषा",
+      hint: "आवाजासाठी इंटरनेट लागते. खाते ऑफलाइन चालते.",
+      quickAdd: "नोंद जोडा",
+      quickToday: "आजची कमाई",
+      quickStock: "स्टॉक मोजा",
+      quickSync: "सिंक",
+      greet: "सांगा — नोंद जोडू, आजची कमाई सांगू, स्टॉक मोजू किंवा सिंक करू?",
+      askDirection: "तुम्ही विकले की खर्च केले?",
+      askItem: "काय होते?",
+      askAmount: "किती रुपये?",
+      askQty: "किती? तीन किलो किंवा सात प्लेट असे सांगा.",
+      askStock: (item) => `${item} किती किलो शिल्लक आहे?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "मिळाले" : "खर्च"}, ${displayItem(draft.item)}. बरोबर आहे? हो म्हणा.`,
+      saved: "जतन झाले.",
+      cancelled: "ठीक आहे, रद्द केले.",
+      today: (summary) => `आज तुम्ही ${money(summary.profit_mean)} कमावले, सुमारे ${money(summary.profit_std_dev)} कमी-जास्त. आले ${money(summary.revenue_mean)}, खर्च ${money(summary.cogs_mean)}, गायब ${money(summary.loss_mean)}.`,
+      noData: "अजून नोंद नाही. पहिली नोंद जोडा.",
+      whyNone: "सांगण्यासाठी नोंद नाही.",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} नोंदी, ${info.confidence} टक्के खात्री.`,
+      stockMissing: (info) => `${displayItem(info.item)} ${info.missing} किलो कमी आहे, सुमारे ${money(info.value)}.`,
+      noStock: "अजून स्टॉक मोजला नाही. स्टॉक मोजा.",
+      syncDone: (info) => `सिंक झाले. ${info.pushed} पाठवले, ${info.pulled} मिळाले.`,
+      syncOffline: "कनेक्शन नाही. सर्व काही या फोनमध्ये जतन आहे.",
+      stockOk: "तुमचा स्टॉक खरेदीच्या हिशोबाने ठीक आहे.",
+      unknown: "मी नोंद जोडणे, आजची कमाई, स्टॉक आणि सिंक यात मदत करू शकतो.",
+      noInternet: "आवाजासाठी इंटरनेट लागते. बटणांनी काम करू शकता.",
+      micDenied: "माइकची परवानगी नाही. बटणे वापरा.",
+      notHeard: "ऐकले नाही. पुन्हा बोला.",
+      unsupported: "या ब्राउझरमध्ये आवाज चालत नाही. बटणे वापरा.",
+      locationDenied: "लोकेशन मिळाले नाही. भाषा बटणाने बदला.",
+      locationSet: "तुमच्या जागेनुसार भाषा निवडली.",
+      langSet: "आता मराठीत बोलेन.",
+      languagePrompt: "मी इंग्रजी, हिंदी, मराठी, ओडिया, तमिळ आणि तेलुगू बोलू शकतो.",
+      saveFailed: "जतन करता आले नाही. पुन्हा प्रयत्न करा.",
+    },
+    or: {
+      title: "ପଚାରନ୍ତୁ",
+      eyebrow: "ସ୍ୱର ସହାୟକ",
+      idle: "ମାଇକ୍ ଦବାଇ କୁହନ୍ତୁ",
+      statusListening: "ଶୁଣୁଛି…",
+      langName: "ଓଡ଼ିଆ",
+      otherLang: "",
+      locationLabel: "ମୋ ସ୍ଥାନରୁ ଭାଷା",
+      hint: "ସ୍ୱର ପାଇଁ ଇଣ୍ଟରନେଟ୍ ଦରକାର। ଖାତା ଅଫଲାଇନ୍ ଚାଲେ।",
+      quickAdd: "ନୋଟ୍ ଯୋଡ଼ନ୍ତୁ",
+      quickToday: "ଆଜିର ଆୟ",
+      quickStock: "ଷ୍ଟକ୍ ଗଣନ୍ତୁ",
+      quickSync: "ସିଙ୍କ୍",
+      greet: "କୁହନ୍ତୁ — ନୋଟ୍ ଯୋଡ଼ିବି, ଆଜିର ଆୟ କହିବି, ଷ୍ଟକ୍ ଗଣିବି କିମ୍ବା ସିଙ୍କ୍ କରିବି?",
+      askDirection: "ଆପଣ ବିକ୍ରି କଲେ ନା ଖର୍ଚ୍ଚ କଲେ?",
+      askItem: "କଣ ଥିଲା?",
+      askAmount: "କେତେ ଟଙ୍କା?",
+      askQty: "କେତେ? ତିନି କିଲୋ କିମ୍ବା ସାତ ପ୍ଲେଟ୍ ଭଳି କୁହନ୍ତୁ।",
+      askStock: (item) => `${item} କେତେ କିଲୋ ବାକି ଅଛି?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "ମିଳିଲା" : "ଖର୍ଚ୍ଚ"}, ${displayItem(draft.item)}। ଠିକ୍ ଅଛି? ହଁ କୁହନ୍ତୁ।`,
+      saved: "ସେଭ୍ ହେଲା।",
+      cancelled: "ଠିକ୍, ବାତିଲ୍ କଲି।",
+      today: (summary) => `ଆଜି ଆପଣ ${money(summary.profit_mean)} ରୋଜଗାର କରିଛନ୍ତି, ପ୍ରାୟ ${money(summary.profit_std_dev)} କମ୍ କିମ୍ବା ଅଧିକ। ଆୟ ${money(summary.revenue_mean)}, ଖର୍ଚ୍ଚ ${money(summary.cogs_mean)}, ନାହିଁ ${money(summary.loss_mean)}।`,
+      noData: "ଏପର୍ଯ୍ୟନ୍ତ ନୋଟ୍ ନାହିଁ। ପ୍ରଥମ ନୋଟ୍ ଯୋଡ଼ନ୍ତୁ।",
+      whyNone: "ବୁଝାଇବା ପାଇଁ ନୋଟ୍ ନାହିଁ।",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} ନୋଟ୍, ${info.confidence} ପ୍ରତିଶତ ଭରସା।`,
+      stockMissing: (info) => `${displayItem(info.item)} ${info.missing} କିଲୋ କମ୍ ଅଛି, ପ୍ରାୟ ${money(info.value)}।`,
+      noStock: "ଷ୍ଟକ୍ ଗଣା ହୋଇନାହିଁ। ଷ୍ଟକ୍ ଗଣନ୍ତୁ।",
+      syncDone: (info) => `ସିଙ୍କ୍ ହେଲା। ${info.pushed} ପଠାଗଲା, ${info.pulled} ମିଳିଲା।`,
+      syncOffline: "କନେକ୍ସନ୍ ନାହିଁ। ସବୁ ଏହି ଫୋନରେ ସେଭ୍ ଅଛି।",
+      stockOk: "ଆପଣଙ୍କ ଷ୍ଟକ୍ କିଣାହିସାବରେ ଠିକ୍ ଅଛି।",
+      unknown: "ମୁଁ ନୋଟ୍ ଯୋଡ଼ିବା, ଆଜିର ଆୟ, ଷ୍ଟକ୍ ଓ ସିଙ୍କ୍‌ରେ ସାହାଯ୍ୟ କରିପାରିବି।",
+      noInternet: "ସ୍ୱର ପାଇଁ ଇଣ୍ଟରନେଟ୍ ଦରକାର। ବଟନ୍ ଦ୍ୱାରା କାମ କରିପାରିବେ।",
+      micDenied: "ମାଇକ୍ ଅନୁମତି ନାହିଁ। ବଟନ୍ ବ୍ୟବହାର କରନ୍ତୁ।",
+      notHeard: "ଶୁଣିଲି ନାହିଁ। ପୁଣି କୁହନ୍ତୁ।",
+      unsupported: "ଏହି ବ୍ରାଉଜରରେ ସ୍ୱର ଚାଲେ ନାହିଁ। ବଟନ୍ ବ୍ୟବହାର କରନ୍ତୁ।",
+      locationDenied: "ଲୋକେସନ୍ ମିଳିଲା ନାହିଁ। ଭାଷା ବଟନ୍‌ରେ ବଦଳାନ୍ତୁ।",
+      locationSet: "ଆପଣଙ୍କ ସ୍ଥାନ ଅନୁସାରେ ଭାଷା ବଛାଗଲା।",
+      langSet: "ବର୍ତ୍ତମାନ ଓଡ଼ିଆରେ କହିବି।",
+      languagePrompt: "ମୁଁ ଇଂରାଜୀ, ହିନ୍ଦୀ, ମରାଠୀ, ଓଡ଼ିଆ, ତାମିଲ ଓ ତେଲୁଗୁ କହିପାରିବି।",
+      saveFailed: "ସେଭ୍ ହେଲା ନାହିଁ। ପୁଣି ଚେଷ୍ଟା କରନ୍ତୁ।",
+    },
+    ta: {
+      title: "கேளுங்கள்",
+      eyebrow: "குரல் உதவியாளர்",
+      idle: "மைக்கை அழுத்திப் பேசுங்கள்",
+      statusListening: "கேட்கிறேன்…",
+      langName: "தமிழ்",
+      otherLang: "",
+      locationLabel: "என் இருப்பிடத்திலிருந்து மொழி",
+      hint: "குரலுக்கு இணையம் தேவை. கணக்கு ஆஃப்லைனில் இயங்கும்.",
+      quickAdd: "குறிப்பு சேர்",
+      quickToday: "இன்றைய வருமானம்",
+      quickStock: "இருப்பு எண்ணு",
+      quickSync: "ஒத்திசை",
+      greet: "சொல்லுங்கள் — குறிப்பு சேர்க்கலாம், இன்றைய வருமானம் சொல்லலாம், இருப்பு எண்ணலாம் அல்லது ஒத்திசைக்கலாம்?",
+      askDirection: "நீங்கள் விற்றீர்களா அல்லது செலவு செய்தீர்களா?",
+      askItem: "என்ன?",
+      askAmount: "எத்தனை ரூபாய்?",
+      askQty: "எவ்வளவு? மூன்று கிலோ அல்லது ஏழு தட்டு என்று சொல்லுங்கள்.",
+      askStock: (item) => `${item} எத்தனை கிலோ மீதம் உள்ளது?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "கிடைத்தது" : "செலவு"}, ${displayItem(draft.item)}. சரியா? ஆம் என்று சொல்லுங்கள்.`,
+      saved: "சேமிக்கப்பட்டது.",
+      cancelled: "சரி, ரத்து செய்துவிட்டேன்.",
+      today: (summary) => `இன்று நீங்கள் ${money(summary.profit_mean)} சம்பாதித்தீர்கள், தோராயமாக ${money(summary.profit_std_dev)} கூடுதலாக அல்லது குறைவாக. வருமானம் ${money(summary.revenue_mean)}, செலவு ${money(summary.cogs_mean)}, காணாமல் ${money(summary.loss_mean)}.`,
+      noData: "இன்னும் குறிப்பு இல்லை. முதல் குறிப்பைச் சேருங்கள்.",
+      whyNone: "விளக்க குறிப்பு இல்லை.",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} குறிப்புகள், ${info.confidence} சதவீதம் உறுதி.`,
+      stockMissing: (info) => `${displayItem(info.item)} ${info.missing} கிலோ குறைவு, சுமார் ${money(info.value)}.`,
+      noStock: "இருப்பு எண்ணப்படவில்லை. இருப்பை எண்ணுங்கள்.",
+      syncDone: (info) => `ஒத்திசைந்தது. ${info.pushed} அனுப்பப்பட்டது, ${info.pulled} பெறப்பட்டது.`,
+      syncOffline: "இணைப்பு இல்லை. எல்லாம் இந்த ஃபோனில் சேமிக்கப்பட்டுள்ளது.",
+      stockOk: "உங்கள் இருப்பு வாங்கியதற்கு சரியாக உள்ளது.",
+      unknown: "குறிப்பு சேர்ப்பது, இன்றைய வருமானம், இருப்பு மற்றும் ஒத்திசைவில் உதவ முடியும்.",
+      noInternet: "குரலுக்கு இணையம் தேவை. பொத்தான்களைப் பயன்படுத்தலாம்.",
+      micDenied: "மைக் அனுமதி இல்லை. பொத்தான்களைப் பயன்படுத்துங்கள்.",
+      notHeard: "கேட்கவில்லை. மீண்டும் பேசுங்கள்.",
+      unsupported: "இந்த உலாவியில் குரல் இல்லை. பொத்தான்களைப் பயன்படுத்துங்கள்.",
+      locationDenied: "இருப்பிடம் கிடைக்கவில்லை. மொழி பொத்தானில் மாற்றுங்கள்.",
+      locationSet: "உங்கள் இருப்பிடத்திற்கேற்ப மொழி தேர்ந்தெடுக்கப்பட்டது.",
+      langSet: "இப்போது தமிழில் பேசுவேன்.",
+      languagePrompt: "ஆங்கிலம், இந்தி, மராத்தி, ஒடியா, தமிழ், தெலுங்கு பேச முடியும்.",
+      saveFailed: "சேமிக்க முடியவில்லை. மீண்டும் முயற்சிக்கவும்.",
+    },
+    te: {
+      title: "అడగండి",
+      eyebrow: "వాయిస్ సహాయకుడు",
+      idle: "మైక్ నొక్కి మాట్లాడండి",
+      statusListening: "వినిపిస్తోంది…",
+      langName: "తెలుగు",
+      otherLang: "",
+      locationLabel: "నా స్థానం నుంచి భాష",
+      hint: "వాయిస్‌కు ఇంటర్నెట్ కావాలి. ఖాతా ఆఫ్‌లైన్‌లో పనిచేస్తుంది.",
+      quickAdd: "నోట్ జోడించు",
+      quickToday: "ఈరోజు ఆదాయం",
+      quickStock: "స్టాక్ లెక్కించు",
+      quickSync: "సింక్",
+      greet: "చెప్పండి — నోట్ జోడించాలా, ఈరోజు ఆదాయం చెప్పాలా, స్టాక్ లెక్కించాలా లేదా సింక్ చేయాలా?",
+      askDirection: "మీరు అమ్మారా లేదా ఖర్చు చేశారా?",
+      askItem: "ఏమిటి?",
+      askAmount: "ఎన్ని రూపాయలు?",
+      askQty: "ఎంత? మూడు కిలోలు లేదా ఏడు ప్లేట్లు అని చెప్పండి.",
+      askStock: (item) => `${item} ఎన్ని కిలోలు మిగిలాయి?`,
+      confirm: (draft) => `${money(draft.amount)} ${draft.direction === "in" ? "వచ్చింది" : "ఖర్చు"}, ${displayItem(draft.item)}. సరేనా? అవును అనండి.`,
+      saved: "సేవ్ అయింది.",
+      cancelled: "సరే, రద్దు చేశాను.",
+      today: (summary) => `ఈరోజు మీరు ${money(summary.profit_mean)} సంపాదించారు, సుమారు ${money(summary.profit_std_dev)} తక్కువ లేదా ఎక్కువ. ఆదాయం ${money(summary.revenue_mean)}, ఖర్చు ${money(summary.cogs_mean)}, మిస్ ${money(summary.loss_mean)}.`,
+      noData: "ఇంకా నోట్‌లు లేవు. మొదటి నోట్ జోడించండి.",
+      whyNone: "వివరించడానికి నోట్ లేదు.",
+      why: (info) => `${info.title}, ${money(info.amount)}, ${info.notes} నోట్‌లు, ${info.confidence} శాతం నమ్మకం.`,
+      stockMissing: (info) => `${displayItem(info.item)} ${info.missing} కిలోలు తక్కువ, సుమారు ${money(info.value)}.`,
+      noStock: "స్టాక్ లెక్కించలేదు. స్టాక్ లెక్కించండి.",
+      syncDone: (info) => `సింక్ అయింది. ${info.pushed} పంపారు, ${info.pulled} వచ్చాయి.`,
+      syncOffline: "కనెక్షన్ లేదు. అంతా ఈ ఫోన్‌లో సేవ్ అయింది.",
+      stockOk: "మీ స్టాక్ కొన్న దానితో సరిపోతోంది.",
+      unknown: "నోట్ జోడించడం, ఈరోజు ఆదాయం, స్టాక్, సింక్‌లో సహాయం చేయగలను.",
+      noInternet: "వాయిస్‌కు ఇంటర్నెట్ కావాలి. బటన్లతో పని చేయవచ్చు.",
+      micDenied: "మైక్ అనుమతి లేదు. బటన్లు వాడండి.",
+      notHeard: "వినిపించలేదు. మళ్లీ చెప్పండి.",
+      unsupported: "ఈ బ్రౌజర్‌లో వాయిస్ లేదు. బటన్లు వాడండి.",
+      locationDenied: "లొకేషన్ దొరకలేదు. భాష బటన్‌తో మార్చండి.",
+      locationSet: "మీ ప్రాంతం ప్రకారం భాష ఎంచుకున్నాను.",
+      langSet: "ఇప్పుడు తెలుగులో మాట్లాడతాను.",
+      languagePrompt: "ఆంగ్లం, హిందీ, మరాఠీ, ఒడియా, తమిళం, తెలుగు మాట్లాడగలను.",
+      saveFailed: "సేవ్ కాలేదు. మళ్లీ ప్రయత్నించండి.",
     },
   };
 
-  const ASSISTANT_WORDS = {
-    cancel: ["cancel", "stop", "रद्द", "बंद"],
-    yes: ["yes", "ok", "okay", "correct", "हाँ", "हां", "ठीक", "सही"],
-    no: ["no", "नहीं", "नही"],
-    sold: ["sold", "sale", "received", "got", "earned", "बेचा", "बेच", "मिला", "कमाया"],
-    spent: ["spent", "spend", "bought", "buy", "paid", "खर्च", "खरीदा", "खरीद", "दिया"],
-    add: ["add", "note", "नोट", "जोड़", "खर्च", "खरीद", "बेच"],
-    today: ["today", "profit", "made", "make", "money", "earned", "कमाई", "कमाया", "मुनाफा", "आज"],
-    stock: ["stock", "count stock", "स्टॉक", "गिन", "माल"],
-    sync: ["sync", "सिंक"],
-    why: ["why", "explain", "क्यों", "कैसे"],
-    language: ["language", "भाषा"],
-    hindi: ["hindi", "हिंदी"],
-    english: ["english", "अंग्रेज़ी"],
+  const LANGUAGES = {
+    en: { native: "English", code: "en-IN", currency: "rupees" },
+    hi: { native: "हिंदी", code: "hi-IN", currency: "रुपये" },
+    mr: { native: "मराठी", code: "mr-IN", currency: "रुपये" },
+    or: { native: "ଓଡ଼ିଆ", code: "or-IN", currency: "ଟଙ୍କା" },
+    ta: { native: "தமிழ்", code: "ta-IN", currency: "ரூபாய்" },
+    te: { native: "తెలుగు", code: "te-IN", currency: "రూపాయలు" },
   };
 
-  const HINDI_STATES = [
-    { name: "Delhi", lat: 28.61, lon: 77.21, hindi: true },
-    { name: "Lucknow", lat: 26.85, lon: 80.95, hindi: true },
-    { name: "Patna", lat: 25.59, lon: 85.14, hindi: true },
-    { name: "Bhopal", lat: 23.26, lon: 77.41, hindi: true },
-    { name: "Jaipur", lat: 26.91, lon: 75.79, hindi: true },
-    { name: "Chandigarh", lat: 30.73, lon: 76.78, hindi: true },
-    { name: "Dehradun", lat: 30.32, lon: 78.03, hindi: true },
-    { name: "Raipur", lat: 21.25, lon: 81.63, hindi: true },
-    { name: "Ranchi", lat: 23.34, lon: 85.31, hindi: true },
-    { name: "Shimla", lat: 31.10, lon: 77.17, hindi: true },
-    { name: "Mumbai", lat: 19.08, lon: 72.88, hindi: false },
-    { name: "Ahmedabad", lat: 23.03, lon: 72.58, hindi: false },
-    { name: "Bengaluru", lat: 12.97, lon: 77.59, hindi: false },
-    { name: "Chennai", lat: 13.08, lon: 80.27, hindi: false },
-    { name: "Hyderabad", lat: 17.39, lon: 78.49, hindi: false },
-    { name: "Kolkata", lat: 22.57, lon: 88.36, hindi: false },
-    { name: "Bhubaneswar", lat: 20.30, lon: 85.82, hindi: false },
-    { name: "Guwahati", lat: 26.14, lon: 91.74, hindi: false },
-    { name: "Thiruvananthapuram", lat: 8.52, lon: 76.94, hindi: false },
-    { name: "Panaji", lat: 15.49, lon: 73.83, hindi: false },
+  const LANGUAGE_WORDS = {
+    en: ["english", "अंग्रेज़ी", "इंग्रजी", "ଇଂରାଜୀ", "ஆங்கிலம்", "ఆంగ్లం"],
+    hi: ["hindi", "हिंदी", "हिन्दी", "हिंदीत", "ହିନ୍ଦୀ", "ஹிந்தி", "హిందీ"],
+    mr: ["marathi", "मराठी"],
+    or: ["odia", "oriya", "ଓଡ଼ିଆ"],
+    ta: ["tamil", "தமிழ்"],
+    te: ["telugu", "తెలుగు"],
+  };
+
+  const ASSISTANT_WORDS = {
+    cancel: ["cancel", "stop", "रद्द", "बंद", "थांबा", "ବାତିଲ୍", "ରଦ୍ଦ", "ரத்து", "நிறுத்து", "రద్దు", "ఆపు"],
+    yes: ["yes", "ok", "okay", "correct", "हाँ", "हां", "ठीक", "सही", "हो", "होय", "ହଁ", "ஆம்", "சரி", "అవును", "సరే"],
+    no: ["no", "नहीं", "नही", "नको", "ନା", "ନାହିଁ", "இல்லை", "வேண்டாம்", "కాదు", "వద్దు"],
+    sold: ["sold", "sale", "received", "got", "earned", "बेचा", "बेच", "मिला", "कमाया", "विकले", "विकला", "बेचले", "मिळाले", "कमावले", "ବିକ୍ରି", "ବିକିଲି", "ମିଳିଲା", "விற்றேன்", "விற்பனை", "கிடைத்தது", "అమ్మాను", "అమ్మకం", "వచ్చింది"],
+    spent: ["spent", "spend", "bought", "buy", "paid", "खर्च", "खरीदा", "खरीद", "दिया", "विकत", "घेतले", "दिले", "ଖର୍ଚ୍ଚ", "କିଣିଲି", "ଦେଲି", "செலவு", "வாங்கினேன்", "கொடுத்தேன்", "ఖర్చు", "కొన్నాను", "ఇచ్చాను"],
+    add: ["add", "note", "नोट", "जोड़", "नोंद", "जोडा", "टाका", "ନୋଟ୍", "ଯୋଡ଼", "குறிப்பு", "சேர்", "నోట్", "జోడించు"],
+    today: ["today", "profit", "made", "make", "money", "earned", "कमाई", "कमाया", "मुनाफा", "आज", "नफा", "ଆଜି", "ରୋଜଗାର", "ଲାଭ", "இன்று", "வருமானம்", "லாபம்", "ఇవాళ", "ఆదాయం", "లాభం"],
+    stock: ["stock", "count stock", "स्टॉक", "गिन", "माल", "मोजणी", "ଷ୍ଟକ୍", "ଗଣନା", "ஸ்டாக்", "கணக்கு", "స్టాక్", "లెక్క"],
+    sync: ["sync", "सिंक", "ସିଙ୍କ୍", "ஒத்திசை", "ஒத்திசைவு", "సింక్"],
+    why: ["why", "explain", "क्यों", "कैसे", "का", "କାହିଁକି", "ஏன்", "ఎందుకు"],
+    language: ["language", "भाषा", "ଭାଷା", "மொழி", "భాష"],
+  };
+
+  const STATE_LANGUAGES = [
+    { name: "Delhi", lat: 28.61, lon: 77.21, lang: "hi" },
+    { name: "Lucknow", lat: 26.85, lon: 80.95, lang: "hi" },
+    { name: "Patna", lat: 25.59, lon: 85.14, lang: "hi" },
+    { name: "Bhopal", lat: 23.26, lon: 77.41, lang: "hi" },
+    { name: "Jaipur", lat: 26.91, lon: 75.79, lang: "hi" },
+    { name: "Chandigarh", lat: 30.73, lon: 76.78, lang: "hi" },
+    { name: "Dehradun", lat: 30.32, lon: 78.03, lang: "hi" },
+    { name: "Raipur", lat: 21.25, lon: 81.63, lang: "hi" },
+    { name: "Ranchi", lat: 23.34, lon: 85.31, lang: "hi" },
+    { name: "Shimla", lat: 31.10, lon: 77.17, lang: "hi" },
+    { name: "Mumbai", lat: 19.08, lon: 72.88, lang: "mr" },
+    { name: "Pune", lat: 18.52, lon: 73.86, lang: "mr" },
+    { name: "Nagpur", lat: 21.15, lon: 79.09, lang: "mr" },
+    { name: "Bhubaneswar", lat: 20.30, lon: 85.82, lang: "or" },
+    { name: "Cuttack", lat: 20.46, lon: 85.88, lang: "or" },
+    { name: "Chennai", lat: 13.08, lon: 80.27, lang: "ta" },
+    { name: "Coimbatore", lat: 11.02, lon: 76.96, lang: "ta" },
+    { name: "Madurai", lat: 9.93, lon: 78.12, lang: "ta" },
+    { name: "Hyderabad", lat: 17.39, lon: 78.49, lang: "te" },
+    { name: "Amaravati", lat: 16.51, lon: 80.52, lang: "te" },
+    { name: "Visakhapatnam", lat: 17.69, lon: 83.22, lang: "te" },
+    { name: "Ahmedabad", lat: 23.03, lon: 72.58, lang: "en" },
+    { name: "Bengaluru", lat: 12.97, lon: 77.59, lang: "en" },
+    { name: "Kolkata", lat: 22.57, lon: 88.36, lang: "en" },
+    { name: "Guwahati", lat: 26.14, lon: 91.74, lang: "en" },
+    { name: "Thiruvananthapuram", lat: 8.52, lon: 76.94, lang: "en" },
+    { name: "Panaji", lat: 15.49, lon: 73.83, lang: "en" },
+    { name: "Srinagar", lat: 34.08, lon: 74.80, lang: "en" },
   ];
 
-  const ITEM_HINDI = {
-    tomatoes: "टमाटर",
-    tomato: "टमाटर",
-    onion: "प्याज़",
-    potato: "आलू",
-    poha: "पोहा",
-    tea: "चाय",
-    snacks: "स्नैक्स",
-    oil: "तेल",
-    "gas cylinder": "गैस सिलेंडर",
+  const ITEM_NAMES = {
+    hi: {
+      tomatoes: "टमाटर", tomato: "टमाटर", onion: "प्याज़", potato: "आलू",
+      poha: "पोहा", tea: "चाय", snacks: "स्नैक्स", oil: "तेल", "gas cylinder": "गैस सिलेंडर",
+    },
+    mr: {
+      tomatoes: "टोमॅटो", tomato: "टोमॅटो", onion: "कांदा", potato: "बटाटा",
+      poha: "पोहे", tea: "चहा", snacks: "स्नॅक्स", oil: "तेल", "gas cylinder": "गॅस सिलिंडर",
+    },
+    or: {
+      tomatoes: "ଟମାଟୋ", tomato: "ଟମାଟୋ", onion: "ପିଆଜ", potato: "ଆଳୁ",
+      poha: "ପୋହା", tea: "ଚା", snacks: "ସ୍ନାକ୍ସ", oil: "ତେଲ", "gas cylinder": "ଗ୍ୟାସ୍ ସିଲିଣ୍ଡର",
+    },
+    ta: {
+      tomatoes: "தக்காளி", tomato: "தக்காளி", onion: "வெங்காயம்", potato: "உருளைக்கிழங்கு",
+      poha: "அவல்", tea: "தேநீர்", snacks: "சிற்றுண்டி", oil: "எண்ணெய்", "gas cylinder": "எரிவாயு சிலிண்டர்",
+    },
+    te: {
+      tomatoes: "టమాటాలు", tomato: "టమాటా", onion: "ఉల్లిపాయ", potato: "బంగాళదుంప",
+      poha: "పొహా", tea: "టీ", snacks: "స్నాక్స్", oil: "నూనె", "gas cylinder": "గ్యాస్ సిలిండర్",
+    },
   };
 
   function assistantText() {
@@ -1523,42 +1829,41 @@
   function parseQty(text, direction) {
     const normalized = String(text).toLowerCase();
     let unit = direction === "in" ? "piece" : "kg";
-    if (/kg|kilo|किलो/.test(normalized)) unit = "kg";
-    else if (/plate|प्लेट/.test(normalized)) unit = "plate";
-    else if (/cup|कप/.test(normalized)) unit = "cup";
-    else if (/litre|liter|लीटर/.test(normalized)) unit = "litre";
-    else if (/piece|नग|पीस/.test(normalized)) unit = "piece";
+    if (/kg|kilo|किलो|கிலோ|కిలో|କିଲୋ/.test(normalized)) unit = "kg";
+    else if (/plate|प्लेट|தட்டு|ప్లేట్|ପ୍ଲେଟ୍/.test(normalized)) unit = "plate";
+    else if (/cup|कप|கப்|కప్పు|କପ୍/.test(normalized)) unit = "cup";
+    else if (/litre|liter|लीटर|லிட்டர்|లీటర్|ଲିଟର/.test(normalized)) unit = "litre";
+    else if (/piece|नग|पीस|துண்டு|ముక్క|ପିସ୍/.test(normalized)) unit = "piece";
     return { qty: parseNumber(text) || 1, unit };
   }
 
   function displayItem(item) {
-    if (state.assistant.lang !== "hi") return item;
-    return ITEM_HINDI[String(item).toLowerCase()] || item;
+    const names = ITEM_NAMES[state.assistant.lang];
+    return names ? names[String(item).toLowerCase()] || item : item;
   }
 
   function spoken(text) {
-    return String(text).replace(/₹\s?([\d,.]+)/g, (_, amount) => (
-      `${amount} ${state.assistant.lang === "hi" ? "रुपये" : "rupees"}`
-    ));
+    const currency = LANGUAGES[state.assistant.lang]?.currency || "rupees";
+    return String(text).replace(/₹\s?([\d,.]+)/g, (_, amount) => `${amount} ${currency}`);
   }
 
-  function nearestHindi(lat, lon) {
-    let best = HINDI_STATES[0];
+  function nearestLanguage(lat, lon) {
+    let best = STATE_LANGUAGES[0];
     let bestDistance = Infinity;
-    HINDI_STATES.forEach((statePoint) => {
+    STATE_LANGUAGES.forEach((statePoint) => {
       const distance = ((statePoint.lat - lat) ** 2) + ((statePoint.lon - lon) ** 2);
       if (distance < bestDistance) {
         bestDistance = distance;
         best = statePoint;
       }
     });
-    return best.hindi;
+    return best.lang;
   }
 
   function voiceFor(lang) {
     if (!("speechSynthesis" in window)) return null;
     const voices = window.speechSynthesis.getVoices();
-    const prefix = lang === "hi" ? "hi" : "en";
+    const prefix = (LANGUAGES[lang]?.code || "en-IN").split("-")[0].toLowerCase();
     return voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix) && voice.lang.toLowerCase().includes("-in"))
       || voices.find((voice) => voice.lang.toLowerCase().startsWith(prefix))
       || null;
@@ -1585,7 +1890,7 @@
     }
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(spoken(text));
-    utterance.lang = state.assistant.lang === "hi" ? "hi-IN" : "en-IN";
+    utterance.lang = LANGUAGES[state.assistant.lang]?.code || "en-IN";
     const voice = voiceFor(state.assistant.lang);
     if (voice) utterance.voice = voice;
     utterance.rate = 0.95;
@@ -1605,7 +1910,8 @@
     $("#assistant-eyebrow").textContent = text.eyebrow;
     $("#assistant-lang-label").textContent = text.langName;
     $("#assistant-status").textContent = state.assistant.listening ? text.statusListening : text.idle;
-    $("#assistant-lang-btn").textContent = text.otherLang;
+    const select = $("#assistant-lang-select");
+    if (select) select.value = state.assistant.lang;
     $("#assistant-location-btn").textContent = text.locationLabel;
     $("#assistant-hint").textContent = text.hint;
     const labels = { add: text.quickAdd, today: text.quickToday, stock: text.quickStock, sync: text.quickSync };
@@ -1616,14 +1922,11 @@
   }
 
   function setAssistantLanguage(lang, announce = true) {
-    state.assistant.lang = lang === "hi" ? "hi" : "en";
-    window.localStorage.setItem("iw-lang", state.assistant.lang);
+    if (!LANGUAGES[lang]) return;
+    state.assistant.lang = lang;
+    window.localStorage.setItem("iw-lang", lang);
     updateAssistantUI();
     if (announce) speak(assistantText().langSet);
-  }
-
-  function toggleAssistantLanguage() {
-    setAssistantLanguage(state.assistant.lang === "en" ? "hi" : "en");
   }
 
   function useLocationLanguage() {
@@ -1634,9 +1937,9 @@
     }
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        const hindi = nearestHindi(position.coords.latitude, position.coords.longitude);
-        state.assistant.lang = hindi ? "hi" : "en";
-        window.localStorage.setItem("iw-lang", state.assistant.lang);
+        const lang = nearestLanguage(position.coords.latitude, position.coords.longitude);
+        state.assistant.lang = lang;
+        window.localStorage.setItem("iw-lang", lang);
         updateAssistantUI();
         speak(`${assistantText().locationSet} ${assistantText().langSet}`);
       },
@@ -1681,7 +1984,7 @@
     }
     const recognition = new Recognition();
     state.assistant.recognition = recognition;
-    recognition.lang = state.assistant.lang === "hi" ? "hi-IN" : "en-IN";
+    recognition.lang = LANGUAGES[state.assistant.lang]?.code || "en-IN";
     recognition.interimResults = true;
     recognition.continuous = false;
     recognition.maxAlternatives = 1;
@@ -1787,9 +2090,16 @@
       saveAssistantStock(assistant.draft.item, counted);
       return;
     }
-    if (hasWord(text, ASSISTANT_WORDS.hindi)) { setAssistantLanguage("hi"); return; }
-    if (hasWord(text, ASSISTANT_WORDS.english)) { setAssistantLanguage("en"); return; }
-    if (hasWord(text, ASSISTANT_WORDS.language)) { toggleAssistantLanguage(); return; }
+    const requestedLanguage = Object.entries(LANGUAGE_WORDS)
+      .find(([, words]) => hasWord(text, words));
+    if (requestedLanguage) {
+      setAssistantLanguage(requestedLanguage[0]);
+      return;
+    }
+    if (hasWord(text, ASSISTANT_WORDS.language)) {
+      speak(assistantText().languagePrompt);
+      return;
+    }
     if (hasWord(text, ASSISTANT_WORDS.today)) { speakToday(); return; }
     if (hasWord(text, ASSISTANT_WORDS.stock)) { startStockFlow(); return; }
     if (hasWord(text, ASSISTANT_WORDS.sync)) { runAssistantSync(); return; }
@@ -1995,7 +2305,7 @@
     $("#stock-form").addEventListener("submit", onStockSubmit);
     $("#assistant-btn").addEventListener("click", openAssistant);
     $("#assistant-orb").addEventListener("click", startListening);
-    $("#assistant-lang-btn").addEventListener("click", toggleAssistantLanguage);
+    $("#assistant-lang-select").addEventListener("change", (event) => setAssistantLanguage(event.target.value));
     $("#assistant-location-btn").addEventListener("click", useLocationLanguage);
     $$("#add-form .seg__btn").forEach((button) => {
       button.addEventListener("click", () => {
@@ -2107,6 +2417,7 @@
 
   function boot() {
     bindEvents();
+    setupDeviceMotion();
     $("#api-base").value = state.apiBase;
     switchTab("today");
     window.setTimeout(hideSplash, 2600);

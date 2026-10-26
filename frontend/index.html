@@ -402,7 +402,17 @@
             <button class="btn btn--small btn--outline" type="button" data-assistant-action="sync">Sync</button>
           </div>
           <div class="assistant-lang-row">
-            <button class="btn btn--small btn--ghost" id="assistant-lang-btn" type="button">हिंदी</button>
+            <label class="lang-pick" aria-label="Assistant language">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a15 15 0 0 1 0 18a15 15 0 0 1 0-18z"/></svg>
+              <select id="assistant-lang-select">
+                <option value="en">English</option>
+                <option value="hi">हिंदी</option>
+                <option value="mr">मराठी</option>
+                <option value="or">ଓଡ଼ିଆ</option>
+                <option value="ta">தமிழ்</option>
+                <option value="te">తెలుగు</option>
+              </select>
+            </label>
             <button class="btn btn--small btn--ghost" id="assistant-location-btn" type="button">Use my location</button>
           </div>
           <p class="add-hint" id="assistant-hint">Voice needs internet. The money book works offline.</p>
